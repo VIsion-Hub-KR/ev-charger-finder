@@ -138,6 +138,25 @@ function fmtDistance(metres) {
 }
 
 /**
+ * 공공 API의 상태 갱신시각(YYYYMMDDHHmmss, KST 벽시각)을 읽기 쉬운 문자열로.
+ * 최근이면 "방금 전 / N분 전 / N시간 전", 그 외는 "MM.DD HH:mm".
+ * @param {string} raw
+ * @returns {string}
+ */
+function fmtUpdate(raw) {
+  const m = String(raw).match(/^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})$/);
+  if (!m) return String(raw);
+  const [, Y, Mo, D, H, Mi, S] = m;
+  const t = new Date(+Y, +Mo - 1, +D, +H, +Mi, +S).getTime();
+  const diffMin = Math.floor((Date.now() - t) / 60000);
+  if (diffMin < 0) return `${Mo}.${D} ${H}:${Mi}`;
+  if (diffMin < 1) return '방금 전';
+  if (diffMin < 60) return `${diffMin}분 전`;
+  if (diffMin < 1440) return `${Math.floor(diffMin / 60)}시간 전`;
+  return `${Mo}.${D} ${H}:${Mi}`;
+}
+
+/**
  * Haversine distance between two LatLng-like objects (metres).
  * @param {{ lat: number, lng: number }} a
  * @param {{ lat: number, lng: number }} b
@@ -335,7 +354,7 @@ function openChargerSheet(station) {
     </div>`;
 
   const lastUpdateHtml = lastUpdate
-    ? `<p class="sheet-update">마지막 갱신: ${lastUpdate}</p>`
+    ? `<p class="sheet-update">${fmtUpdate(lastUpdate)} 기준</p>`
     : '';
 
   el.innerHTML = `
