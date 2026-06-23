@@ -134,7 +134,7 @@ body {
     0 0 0 1px rgba(0, 0, 0, 0.04);
   word-break: keep-all;
   text-align: center;
-  animation: notice-fadein 0.2s ease forwards;
+  animation: chip-fadein 0.2s ease forwards;
 }
 
 .search-no-result[hidden] {
@@ -310,6 +310,12 @@ body {
 @keyframes notice-fadein {
   from { opacity: 0; transform: translateX(-50%) translateY(8px); }
   to   { opacity: 1; transform: translateX(-50%) translateY(0);   }
+}
+
+/* 가운데 정렬이 아닌(left/right로 고정된) 칩·배너용 — translateX 없이 페이드만 */
+@keyframes chip-fadein {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0);   }
 }
 
 /* ---------- Blue Dot (My Location Marker) ----------
@@ -903,7 +909,7 @@ body {
   font-weight: 500;
   word-break: keep-all;
   box-shadow: 0 4px 14px rgba(28, 110, 242, 0.30);
-  animation: notice-fadein 0.2s ease forwards;
+  animation: chip-fadein 0.2s ease forwards;
 }
 
 .route-banner[hidden] {
@@ -1031,7 +1037,7 @@ body {
 
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.10);
   pointer-events: none;
-  animation: notice-fadein 0.2s ease forwards;
+  animation: chip-fadein 0.2s ease forwards;
 }
 
 #freshness-indicator[hidden] {
