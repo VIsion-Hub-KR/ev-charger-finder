@@ -1619,6 +1619,9 @@ async function exitRouteMode() {
   filter.speed = routePrevSpeed;
   updateChipUI(document.querySelectorAll('.chip[data-filter]'));
 
+  // 경로 모드에서 숨겼던 테슬라 마커 전체 복원 (필터 상태에 맞게)
+  teslaMarkers.forEach((m) => m.setMap(filter.tesla ? map : null));
+
   // Reload normal chargers for current map centre
   const centre = map.getCenter();
   await loadChargers({ lat: centre.lat(), lng: centre.lng() }, { force: true });
@@ -1796,10 +1799,12 @@ async function enterRouteMode() {
   // 8. Render corridor stations
   renderChargerMarkers(filteredStations);
 
-  // Hide Tesla markers in route mode (route is for 환경부 chargers only)
-  if (!filter.tesla) {
-    teslaMarkers.forEach((m) => m.setMap(null));
-  }
+  // 테슬라 슈퍼차저도 경로 ±1km 안에 있는 것만 표시 (전국 전체 X — 이게 "다 보이던" 버그였음)
+  teslaMarkers.forEach((m) => {
+    const p = m.getPosition();
+    const onRoute = filter.tesla && distToPolyline({ lat: p.lat(), lng: p.lng() }, path) <= CORRIDOR_M;
+    m.setMap(onRoute ? map : null);
+  });
 
   // 9. Update nearby list: sort by distance from origin (myPosition)
   renderNearbyList();
