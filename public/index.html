@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#ffffff" />
+  <title>충전소 찾기</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- Full-screen map container -->
+  <div id="map" role="application" aria-label="전기차 충전소 지도"></div>
+
+  <!-- Floating search bar (top) — wiring deferred to Task 11 -->
+  <div class="search-bar" role="search" aria-label="주소 및 지명 검색">
+    <span class="search-icon" aria-hidden="true">
+      <!-- Magnifier SVG -->
+      <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24"
+           fill="none" stroke="currentColor" stroke-width="2"
+           stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="11" cy="11" r="8"/>
+        <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+      </svg>
+    </span>
+    <!--
+      TODO (Task 11): 검색 입력 처리 — 네이버 지도 Geocoding API 연동
+      현재는 시각적 요소만 존재하며 실제 검색 기능은 구현되지 않음.
+    -->
+    <input
+      type="search"
+      id="search-input"
+      placeholder="어디로 가시나요? 주소·지명 검색"
+      autocomplete="off"
+      autocorrect="off"
+      spellcheck="false"
+      aria-label="주소 또는 지명 검색"
+      readonly
+    />
+  </div>
+
+  <!-- GPS / My location button (bottom right) -->
+  <button
+    id="btn-my-location"
+    class="btn-my-location"
+    type="button"
+    aria-label="내 위치로 이동"
+    title="내 위치로 이동"
+  >
+    <!-- Location crosshair SVG -->
+    <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24"
+         fill="none" stroke="currentColor" stroke-width="2"
+         stroke-linecap="round" stroke-linejoin="round"
+         aria-hidden="true">
+      <circle cx="12" cy="12" r="3"/>
+      <line x1="12" y1="2"  x2="12" y2="6"/>
+      <line x1="12" y1="18" x2="12" y2="22"/>
+      <line x1="2"  y1="12" x2="6"  y2="12"/>
+      <line x1="18" y1="12" x2="22" y2="12"/>
+    </svg>
+  </button>
+
+  <!-- Non-blocking location notice (shown when Geolocation denied/unavailable) -->
+  <div id="location-notice" class="location-notice" role="status" aria-live="polite" hidden>
+    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24"
+         fill="none" stroke="currentColor" stroke-width="2"
+         stroke-linecap="round" stroke-linejoin="round"
+         aria-hidden="true">
+      <circle cx="12" cy="12" r="10"/>
+      <line x1="12" y1="8" x2="12" y2="12"/>
+      <line x1="12" y1="16" x2="12.01" y2="16"/>
+    </svg>
+    <span>위치를 가져올 수 없어 서울시청을 기준으로 표시합니다.</span>
+  </div>
+
+  <!-- TODO: replace __NAVER_MAP_CLIENT_ID__ with NCP Web Dynamic Map client id -->
+  <script
+    src="https://oapi.map.naver.com/openapi/v3/maps.js?ncpKeyId=__NAVER_MAP_CLIENT_ID__"
+    type="text/javascript"
+  ></script>
+  <script src="app.js" type="module"></script>
+</body>
+</html>

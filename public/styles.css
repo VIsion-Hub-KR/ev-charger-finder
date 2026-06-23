@@ -1,0 +1,176 @@
+/* ============================================================
+   EV Charger Finder — Global Styles
+   Mobile-first, portrait. Full-bleed map.
+   Accent: Tesla Red #e31937 (used sparingly)
+   Font: Apple SD Gothic Neo / Pretendard / -apple-system stack
+   ============================================================ */
+
+/* ---------- Reset & Base ---------- */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body {
+  width: 100%;
+  height: 100dvh; /* dynamic viewport height for mobile browsers */
+  overflow: hidden;
+  background: #f5f5f5;
+}
+
+body {
+  font-family:
+    "Apple SD Gothic Neo",
+    "Pretendard",
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
+  font-size: 16px;
+  line-height: 1.5;
+  color: #1a1a1a;
+  word-break: keep-all; /* Korean readability */
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ---------- Map (full-bleed) ---------- */
+#map {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100dvh;
+  z-index: 0;
+  background: #e8e8e8; /* placeholder colour until map tiles load */
+}
+
+/* ---------- Floating Search Bar ---------- */
+.search-bar {
+  position: fixed;
+  top: max(16px, env(safe-area-inset-top, 16px));
+  left: 16px;
+  right: 16px;
+  z-index: 100;
+
+  display: flex;
+  align-items: center;
+  gap: 10px;
+
+  background: #ffffff;
+  border-radius: 14px;
+  padding: 0 16px;
+  height: 52px; /* touch target ≥ 44px */
+
+  box-shadow:
+    0 2px 8px rgba(0, 0, 0, 0.10),
+    0 0 0 1px rgba(0, 0, 0, 0.04);
+}
+
+.search-icon {
+  flex-shrink: 0;
+  color: #888;
+  display: flex;
+  align-items: center;
+}
+
+#search-input {
+  flex: 1;
+  border: none;
+  outline: none;
+  background: transparent;
+  font-family: inherit;
+  font-size: 15px;
+  color: #1a1a1a;
+  cursor: default; /* visual only until Task 11 */
+}
+
+#search-input::placeholder {
+  color: #aaa;
+}
+
+/* ---------- GPS / My Location Button ---------- */
+.btn-my-location {
+  position: fixed;
+  bottom: max(32px, env(safe-area-inset-bottom, 32px));
+  right: 16px;
+  z-index: 100;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  width: 52px;   /* touch target ≥ 44px */
+  height: 52px;
+  border-radius: 50%;
+  border: none;
+  cursor: pointer;
+
+  background: #ffffff;
+  color: #e31937; /* Tesla Red accent, sparingly */
+  box-shadow:
+    0 2px 8px rgba(0, 0, 0, 0.12),
+    0 0 0 1px rgba(0, 0, 0, 0.05);
+
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.btn-my-location:active {
+  transform: scale(0.93);
+  box-shadow:
+    0 1px 4px rgba(0, 0, 0, 0.10),
+    0 0 0 1px rgba(0, 0, 0, 0.05);
+}
+
+.btn-my-location:focus-visible {
+  outline: 3px solid #e31937;
+  outline-offset: 3px;
+}
+
+/* ---------- Location Notice (non-blocking) ---------- */
+.location-notice {
+  position: fixed;
+  bottom: max(100px, env(safe-area-inset-bottom, 100px));
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 100;
+
+  display: flex;
+  align-items: center;
+  gap: 8px;
+
+  background: rgba(30, 30, 30, 0.85);
+  color: #fff;
+  font-size: 13px;
+  border-radius: 20px;
+  padding: 10px 16px;
+  white-space: nowrap;
+  pointer-events: none;
+
+  /* fade-in */
+  animation: notice-fadein 0.3s ease forwards;
+}
+
+.location-notice[hidden] {
+  display: none;
+}
+
+@keyframes notice-fadein {
+  from { opacity: 0; transform: translateX(-50%) translateY(8px); }
+  to   { opacity: 1; transform: translateX(-50%) translateY(0);   }
+}
+
+/* ---------- Blue Dot (My Location Marker) ----------
+   Injected via JS as a naver.maps.Marker with a custom HTML overlay.
+   Styles live here so the JS stays clean. */
+.my-location-dot {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #1a73e8;           /* Google-Maps-style blue */
+  border: 3px solid #ffffff;
+  box-shadow: 0 1px 6px rgba(26, 115, 232, 0.6);
+}
