@@ -119,6 +119,9 @@ let lastDestination = null;
 /** Whether route corridor mode is currently active. */
 let routeModeActive = false;
 
+/** 경로 모드 진입 전 속도 필터 값(복원용). 경로 모드는 급속 강제. */
+let routePrevSpeed = null;
+
 /** @type {naver.maps.Polyline|null} — The route polyline drawn on the map. */
 let routePolyline = null;
 
@@ -1612,6 +1615,10 @@ async function exitRouteMode() {
   hideRouteBanner();
   updateRouteModeButton();
 
+  // 경로 모드에서 강제했던 급속 필터를 원래대로 복원
+  filter.speed = routePrevSpeed;
+  updateChipUI(document.querySelectorAll('.chip[data-filter]'));
+
   // Reload normal chargers for current map centre
   const centre = map.getCenter();
   await loadChargers({ lat: centre.lat(), lng: centre.lng() }, { force: true });
@@ -1768,6 +1775,11 @@ async function enterRouteMode() {
     })
   );
 
+  // 경로(여행)에는 급속만 — 속도 필터를 급속으로 강제하고 칩 UI도 반영 (종료 시 복원)
+  routePrevSpeed = filter.speed;
+  filter.speed = 'fast';
+  updateChipUI(document.querySelectorAll('.chip[data-filter]'));
+
   // 6. Filter to stations within 3 km of the route polyline
   const CORRIDOR_M = 3000;
   const corridorStations = Array.from(stationMap.values()).filter((st) => {
@@ -1778,7 +1790,7 @@ async function enterRouteMode() {
     return dist <= CORRIDOR_M;
   });
 
-  // 7. Apply existing speed/avail filters on top
+  // 7. 급속만 + 빈자리 토글 등 기존 필터 적용 (filter.speed='fast'로 강제됨)
   const filteredStations = corridorStations.filter(chargerPassesFilter);
 
   // 8. Render corridor stations
