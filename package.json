@@ -4,7 +4,8 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "test": "node --test"
+    "test": "node --test",
+    "warm": "node --env-file=.env.local scripts/warm.mjs"
   },
   "dependencies": {
     "@vercel/kv": "latest"
