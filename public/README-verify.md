@@ -83,7 +83,7 @@ Or: `npx serve public` for frontend-only testing (API calls will fail — that i
   ("N / M대 사용 가능", charging count if > 0), operator name, connector types, distance
   from my location, last-updated timestamp (if present in API response).
 - [ ] Speed badge colour: 급속 = orange tint, 완속 = green tint.
-- [ ] "네이버지도로 길찾기" button is present but does not navigate (Task 11 TODO).
+- [ ] "네이버지도로 길찾기" button navigates to Naver Map directions (Task 11 ✓).
 - [ ] Sheet closes when tapping the X button or the backdrop.
 
 ### Detail bottom sheet — Tesla supercharger
@@ -93,7 +93,7 @@ Or: `npx serve public` for frontend-only testing (API calls will fail — that i
   a note line "실시간 빈자리 정보는 제공되지 않습니다. Tesla 앱에서 확인하세요.",
   distance from my location.
 - [ ] No availability numbers (no fake data).
-- [ ] "네이버지도로 길찾기" red button is present but does not navigate (Task 11 TODO).
+- [ ] "네이버지도로 길찾기" red button opens Naver Map directions (Task 11 ✓).
 
 ### Retry / error state
 
@@ -131,10 +131,71 @@ Or: `npx serve public` for frontend-only testing (API calls will fail — that i
 
 ---
 
-## NOT verified in this task (Task 11)
+## Task 11 Checks (filters, map toggle, search, move-refetch, directions)
 
-- Filter chips interaction
-- Address search bar wiring (currently `readonly`)
-- 길찾기 button URL (button exists but handler is a console.info stub)
-- Refetch on map drag/zoom
-- 2D map toggle
+### Filter chips
+
+- [ ] **전체 chip** — default active (dark filled). All 환경부 + Tesla markers visible.
+- [ ] **급속 chip** — tap activates (dark filled); only 환경부 markers with `chargerType` = 급속 visible. 완속 markers hidden.
+- [ ] **완속 chip** — tap activates; only 완속 환경부 markers visible. Mutually exclusive: activating 완속 deactivates 급속.
+- [ ] **테슬라 chip** — toggles Tesla red markers on/off. Initial state: on (active). Tap to hide red markers; tap again to show.
+- [ ] **빈자리 chip** — toggles availability filter. Only 환경부 stations with `availableCount > 0` visible. Combines with 급속/완속 (e.g. 급속 + 빈자리 = 빈자리 있는 급속).
+- [ ] **전체 chip auto-resets** — if all sub-filters are off/default (speed=none, tesla=on, avail=off), 전체 chip becomes active.
+- [ ] Filter changes do NOT reload the page or call `/api/chargers` — only show/hide existing markers.
+- [ ] Chips scroll horizontally if they overflow viewport width.
+- [ ] Chip touch target ≥ 34px tall; visual distinction between active/inactive is clear.
+
+### 2D / 상세 지도 토글
+
+- [ ] **Toggle button** visible above the GPS button (bottom-right), circular, with a map SVG icon and "2D" label.
+- [ ] Tap: switches to HYBRID (satellite + labels). Button turns dark background, label changes to "상세", globe SVG appears.
+- [ ] Tap again: returns to NORMAL (2D). Button returns to white, label "2D", map SVG appears.
+- [ ] No emoji — all icons are inline SVG.
+- [ ] Focus ring visible on keyboard navigation.
+
+### Address search
+
+- [ ] Search input is now **interactive** (not readonly) — tap to focus, mobile keyboard opens.
+- [ ] Type an address or place name (e.g. "강남구청", "서울시청") → press Enter.
+- [ ] Map moves to the geocoded location; charger markers reload for new centre.
+- [ ] A clear (×) button appears inside the search bar when text is present; tapping clears and refocuses.
+- [ ] If the query returns no results: a small notice "검색 결과를 찾을 수 없습니다." appears below the search bar (auto-hides ~3 s).
+- [ ] TODO (requires NCP key with Geocoding API enabled): confirm `naver.maps.Service.geocode` fires and `response.v2.addresses[0]` contains `x` (lng) and `y` (lat) fields.
+
+### Refetch on map move
+
+- [ ] **Pan** the map to a new area (~500 m+ away) → ~400 ms after panning stops, `/api/chargers` request fires for the new centre (check DevTools Network tab).
+- [ ] **Small pan** (< 300 m) → no new request (check console: "중심 이동 Xm < 300m — 재조회 건너뜀").
+- [ ] **While a request is in-flight**: pan again → second request is skipped (check console: "이미 요청 중 — 중복 요청 건너뜀").
+- [ ] Loading overlay appears / disappears correctly during move-refetch.
+
+### 길찾기 directions button
+
+- [ ] Tap "네이버지도로 길찾기" on any 환경부 charger sheet → new tab opens with Naver Map directions.
+- [ ] Tap "네이버지도로 길찾기" on any Tesla sheet → new tab opens with Naver Map directions.
+- [ ] URL format: `https://map.naver.com/p/directions/-/-/{lng},{lat},{name}/-/walk`
+  - Destination coordinates are in **lng,lat** order (not lat,lng).
+  - Station name is URL-encoded.
+  - Opens in new tab (`_blank`), no referrer leaking (`noopener,noreferrer`).
+- [ ] TODO (live): confirm the URL sets the correct pin on the Naver Map destination.
+
+---
+
+## Accessibility additions (Task 11)
+
+- [ ] Filter chips have `role="group"` container, individual chips are `<button>` elements.
+- [ ] Map type toggle has descriptive `aria-label` that updates on toggle ("2D 지도" / "위성 지도 (상세)").
+- [ ] Search clear button has `aria-label="검색어 지우기"`.
+- [ ] "검색 결과 없음" notice has `role="status"` + `aria-live="polite"`.
+
+---
+
+## NOT verified in this task (live browser deferred — no NCP key)
+
+- Actual map rendering with real tiles
+- Geolocation (GPS) in browser
+- Real charger data from `/api/chargers`
+- `naver.maps.Service.geocode` (address search) — requires NCP Geocoding API permission
+- `naver.maps.Service.reverseGeocode` (zscode) — requires NCP reverse-geocode permission
+- Filter visual appearance on real map data
+- 길찾기 URL confirmed correct destination on Naver Map (coordinate order)

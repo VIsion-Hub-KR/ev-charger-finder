@@ -84,50 +84,199 @@ body {
   font-family: inherit;
   font-size: 15px;
   color: #1a1a1a;
-  cursor: default; /* visual only until Task 11 */
+  cursor: text;
+  min-width: 0; /* prevent overflow in flex container */
 }
 
 #search-input::placeholder {
   color: #aaa;
 }
 
-/* ---------- GPS / My Location Button ---------- */
-.btn-my-location {
-  position: fixed;
-  bottom: max(32px, env(safe-area-inset-bottom, 32px));
-  right: 16px;
-  z-index: 100;
-
+/* Clear (×) button inside search bar */
+.search-clear {
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: none;
+  background: #ebebeb;
+  color: #666;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: background 0.12s ease;
+}
 
-  width: 52px;   /* touch target ≥ 44px */
-  height: 52px;
+.search-clear:active {
+  background: #ddd;
+}
+
+.search-clear[hidden] {
+  display: none;
+}
+
+/* Search "no result" inline message */
+.search-no-result {
+  position: fixed;
+  top: max(76px, calc(env(safe-area-inset-top, 16px) + 60px));
+  left: 16px;
+  right: 16px;
+  z-index: 101;
+  background: #fff;
+  border-radius: 10px;
+  padding: 12px 16px;
+  font-size: 14px;
+  color: #555;
+  box-shadow:
+    0 2px 8px rgba(0, 0, 0, 0.10),
+    0 0 0 1px rgba(0, 0, 0, 0.04);
+  word-break: keep-all;
+  text-align: center;
+  animation: notice-fadein 0.2s ease forwards;
+}
+
+.search-no-result[hidden] {
+  display: none;
+}
+
+/* ---------- Filter Chips ---------- */
+.filter-chips {
+  position: fixed;
+  top: max(76px, calc(env(safe-area-inset-top, 16px) + 60px));
+  left: 0;
+  right: 0;
+  z-index: 100;
+  display: flex;
+  gap: 8px;
+  padding: 0 16px;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+
+.filter-chips::-webkit-scrollbar {
+  display: none;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+  height: 34px;
+  padding: 0 14px;
+  border-radius: 17px;
+  border: 1.5px solid #ddd;
+  background: #fff;
+  color: #444;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  -webkit-tap-highlight-color: transparent;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease,
+    box-shadow 0.15s ease;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+.chip:active {
+  transform: scale(0.96);
+}
+
+/* Active / selected state */
+.chip--active {
+  background: #1a1a1a;
+  border-color: #1a1a1a;
+  color: #fff;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.18);
+}
+
+/* Tesla chip active: use Tesla Red */
+.chip[data-filter="tesla"].chip--active {
+  background: #e31937;
+  border-color: #e31937;
+  color: #fff;
+}
+
+/* 빈자리 chip active: use green */
+.chip[data-filter="avail"].chip--active {
+  background: #1c9e52;
+  border-color: #1c9e52;
+  color: #fff;
+}
+
+/* ---------- GPS / My Location Button & Map Type Toggle ---------- */
+/* Shared floating action button base */
+.btn-my-location,
+.btn-map-type {
+  position: fixed;
+  right: 16px;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   border-radius: 50%;
   border: none;
   cursor: pointer;
-
   background: #ffffff;
-  color: #e31937; /* Tesla Red accent, sparingly */
   box-shadow:
     0 2px 8px rgba(0, 0, 0, 0.12),
     0 0 0 1px rgba(0, 0, 0, 0.05);
-
   transition: transform 0.15s ease, box-shadow 0.15s ease;
   -webkit-tap-highlight-color: transparent;
 }
 
-.btn-my-location:active {
+.btn-my-location:active,
+.btn-map-type:active {
   transform: scale(0.93);
   box-shadow:
     0 1px 4px rgba(0, 0, 0, 0.10),
     0 0 0 1px rgba(0, 0, 0, 0.05);
 }
 
-.btn-my-location:focus-visible {
+.btn-my-location:focus-visible,
+.btn-map-type:focus-visible {
   outline: 3px solid #e31937;
   outline-offset: 3px;
+}
+
+/* ---------- GPS / My Location Button ---------- */
+.btn-my-location {
+  bottom: max(32px, env(safe-area-inset-bottom, 32px));
+  width: 52px;   /* touch target ≥ 44px */
+  height: 52px;
+  color: #e31937; /* Tesla Red accent, sparingly */
+}
+
+/* Map type toggle — sits above GPS button */
+.btn-map-type {
+  bottom: calc(max(32px, env(safe-area-inset-bottom, 32px)) + 60px);
+  width: 52px;
+  height: 52px;
+  flex-direction: column;
+  gap: 2px;
+  color: #444;
+}
+
+/* Active (hybrid/satellite) state */
+.btn-map-type[data-mode="hybrid"] {
+  background: #1a1a1a;
+  color: #fff;
+}
+
+.btn-map-type-label {
+  font-family: inherit;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  line-height: 1;
+  pointer-events: none;
 }
 
 /* ---------- Location Notice (non-blocking) ---------- */

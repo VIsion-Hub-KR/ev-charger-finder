@@ -11,7 +11,7 @@
   <!-- Full-screen map container -->
   <div id="map" role="application" aria-label="전기차 충전소 지도"></div>
 
-  <!-- Floating search bar (top) — wiring deferred to Task 11 -->
+  <!-- Floating search bar (top) — wired in Task 11 via Naver Maps Geocoding API -->
   <div class="search-bar" role="search" aria-label="주소 및 지명 검색">
     <span class="search-icon" aria-hidden="true">
       <!-- Magnifier SVG -->
@@ -22,10 +22,6 @@
         <line x1="21" y1="21" x2="16.65" y2="16.65"/>
       </svg>
     </span>
-    <!--
-      TODO (Task 11): 검색 입력 처리 — 네이버 지도 Geocoding API 연동
-      현재는 시각적 요소만 존재하며 실제 검색 기능은 구현되지 않음.
-    -->
     <input
       type="search"
       id="search-input"
@@ -34,8 +30,46 @@
       autocorrect="off"
       spellcheck="false"
       aria-label="주소 또는 지명 검색"
-      readonly
     />
+    <!-- Clear button (hidden until input has text) -->
+    <button
+      id="search-clear"
+      class="search-clear"
+      type="button"
+      aria-label="검색어 지우기"
+      hidden
+    >
+      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24"
+           fill="none" stroke="currentColor" stroke-width="2.5"
+           stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <line x1="18" y1="6" x2="6" y2="18"/>
+        <line x1="6"  y1="6" x2="18" y2="18"/>
+      </svg>
+    </button>
+  </div>
+
+  <!-- Filter chips (below search bar) -->
+  <div class="filter-chips" role="group" aria-label="충전소 필터">
+    <button class="chip chip--active" data-filter="all"    type="button">전체</button>
+    <button class="chip"              data-filter="fast"   type="button">급속</button>
+    <button class="chip"              data-filter="slow"   type="button">완속</button>
+    <button class="chip"              data-filter="tesla"  type="button">
+      <!-- Lightning bolt icon -->
+      <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24"
+           fill="currentColor" aria-hidden="true">
+        <path d="M13 2L4.09 12.97H11L10 22l8.91-10.97H13L13 2z"/>
+      </svg>
+      테슬라
+    </button>
+    <button class="chip"              data-filter="avail"  type="button">
+      <!-- Check-circle icon -->
+      <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24"
+           fill="none" stroke="currentColor" stroke-width="2.5"
+           stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <polyline points="20 6 9 17 4 12"/>
+      </svg>
+      빈자리
+    </button>
   </div>
 
   <!-- GPS / My location button (bottom right) -->
@@ -57,6 +91,40 @@
       <line x1="2"  y1="12" x2="6"  y2="12"/>
       <line x1="18" y1="12" x2="22" y2="12"/>
     </svg>
+  </button>
+
+  <!-- 2D / 상세 map type toggle button (above GPS button) -->
+  <button
+    id="btn-map-type"
+    class="btn-map-type"
+    type="button"
+    aria-label="지도 유형 전환: 2D 지도"
+    title="지도 유형 전환"
+    data-mode="normal"
+  >
+    <!-- Map layers icon — 2D mode default -->
+    <svg id="map-type-icon-normal" xmlns="http://www.w3.org/2000/svg"
+         width="20" height="20" viewBox="0 0 24 24"
+         fill="none" stroke="currentColor" stroke-width="2"
+         stroke-linecap="round" stroke-linejoin="round"
+         aria-hidden="true">
+      <!-- Simple map icon: folded paper/road map -->
+      <polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"/>
+      <line x1="8" y1="2" x2="8" y2="18"/>
+      <line x1="16" y1="6" x2="16" y2="22"/>
+    </svg>
+    <!-- Satellite icon — shown when in hybrid mode -->
+    <svg id="map-type-icon-hybrid" xmlns="http://www.w3.org/2000/svg"
+         width="20" height="20" viewBox="0 0 24 24"
+         fill="none" stroke="currentColor" stroke-width="2"
+         stroke-linecap="round" stroke-linejoin="round"
+         aria-hidden="true" hidden>
+      <!-- Globe/satellite icon: circle with latitude/longitude lines -->
+      <circle cx="12" cy="12" r="10"/>
+      <line x1="2" y1="12" x2="22" y2="12"/>
+      <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
+    </svg>
+    <span id="map-type-label" class="btn-map-type-label">2D</span>
   </button>
 
   <!-- Non-blocking location notice (shown when Geolocation denied/unavailable) -->

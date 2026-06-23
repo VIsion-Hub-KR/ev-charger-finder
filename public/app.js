@@ -1,20 +1,19 @@
 /**
- * app.js — Task 10: Charger + Tesla markers, detail sheet, reverse-geocode, loading state
+ * app.js — Task 11: Filter chips, 2D/상세 map toggle, address search,
+ *                   refetch-on-move, 길찾기 directions
  *
- * Scope:
- *   - 네이버 지도 initialisation + My Location (from Task 9)
- *   - Reverse-geocode map centre → zscode (first 5 digits of admcode)
- *   - Load 환경부 chargers from GET /api/chargers and render colour-coded markers
- *   - Load Tesla superchargers from GET /tesla-superchargers.json and render red markers
- *   - Loading overlay for slow API (~30-40 s cold)
- *   - Detail bottom sheet on marker click (환경부 vs Tesla)
+ * Builds on Task 10. All previous functionality preserved.
  *
- * NOT in scope (Task 11):
- *   - Filter chips behaviour
- *   - 2D map toggle
- *   - Address search wiring
- *   - Refetch on map move
- *   - 길찾기 actual URL
+ * New in Task 11:
+ *   1. Filter chips (전체/급속/완속/테슬라/빈자리) — show/hide existing markers
+ *   2. 2D / 상세 map type toggle (NORMAL ↔ HYBRID)
+ *   3. Address search via naver.maps.Service.geocode → map.setCenter + reload
+ *   4. Refetch chargers on map idle (debounced 400 ms, min-distance guard, in-flight guard)
+ *   5. 길찾기 button → Naver Map directions deep link (new tab)
+ *
+ * TODO (live verification): All Naver SDK service calls (geocode, reverseGeocode) require
+ *   a valid NCP key with the appropriate plan. Replace __NAVER_MAP_CLIENT_ID__ in index.html
+ *   before testing in browser.
  */
 
 'use strict';
@@ -28,6 +27,21 @@ const SEOUL_CITY_HALL = { lat: 37.5663, lng: 126.9779 };
 
 const DEFAULT_ZOOM    = 14;
 const CHARGER_RADIUS  = 5000; // metres, passed to /api/chargers
+
+// ---------------------------------------------------------------------------
+// Constants (Task 11 additions)
+// ---------------------------------------------------------------------------
+
+/**
+ * Minimum distance (metres) the map centre must move before triggering a
+ * charger reload on idle. Avoids unnecessary API calls for tiny pan adjustments.
+ */
+const MIN_MOVE_METRES = 300;
+
+/**
+ * Debounce delay (ms) for the map idle refetch.
+ */
+const IDLE_DEBOUNCE_MS = 400;
 
 // ---------------------------------------------------------------------------
 // State
@@ -48,12 +62,55 @@ const chargerMarkers = [];
 /** @type {naver.maps.Marker[]} — Tesla supercharger marker pool */
 const teslaMarkers = [];
 
+/**
+ * Raw station data for each charger marker (parallel array to chargerMarkers).
+ * Used by the filter system to re-evaluate visibility without an API reload.
+ * @type {object[]}
+ */
+const chargerData = [];
+
+// ---------------------------------------------------------------------------
+// Filter state (Task 11)
+// ---------------------------------------------------------------------------
+
+/**
+ * Active filter state.
+ *
+ * speed:  null = 전체, 'fast' = 급속 only, 'slow' = 완속 only
+ * tesla:  true = show Tesla layer, false = hide
+ * avail:  true = 빈자리 있는 충전소만
+ */
+const filter = {
+  speed: null,  // null | 'fast' | 'slow'
+  tesla: true,
+  avail: false,
+};
+
+// ---------------------------------------------------------------------------
+// Idle-refetch state (Task 11)
+// ---------------------------------------------------------------------------
+
+/** Centre coord of the LAST successful charger load. Used for min-distance check. */
+let lastLoadedCentre = null;
+
+/** True while a charger load is in-flight — prevents duplicate concurrent requests. */
+let chargerLoadInFlight = false;
+
+/** Timer handle for the debounced idle refetch. */
+let idleDebounceTimer = null;
+
 // ---------------------------------------------------------------------------
 // DOM refs (populated after DOMContentLoaded / inline script)
 // ---------------------------------------------------------------------------
 
 const locationNoticeEl = document.getElementById('location-notice');
 const btnMyLocation    = document.getElementById('btn-my-location');
+const searchInput      = document.getElementById('search-input');
+const searchClear      = document.getElementById('search-clear');
+const btnMapType       = document.getElementById('btn-map-type');
+const mapTypeLabelEl   = document.getElementById('map-type-label');
+const mapTypeIconNormal = document.getElementById('map-type-icon-normal');
+const mapTypeIconHybrid = document.getElementById('map-type-icon-hybrid');
 
 // ---------------------------------------------------------------------------
 // Utility
@@ -314,10 +371,8 @@ function openChargerSheet(station) {
       </button>
     </div>`;
 
-  // TODO (Task 11): wire btn-directions click to naver maps directions URL
   el.querySelector('.btn-directions').addEventListener('click', () => {
-    // placeholder — direction URL wiring deferred to Task 11
-    console.info('[Task 11 TODO] 길찾기:', lat, lng);
+    openNaverDirections({ lat, lng, name });
   });
 
   el.hidden = false;
@@ -375,9 +430,8 @@ function openTeslaSheet(station) {
       </button>
     </div>`;
 
-  // TODO (Task 11): wire btn-directions-tesla click to naver maps directions URL
   el.querySelector('.btn-directions-tesla').addEventListener('click', () => {
-    console.info('[Task 11 TODO] 길찾기 (Tesla):', lat, lng);
+    openNaverDirections({ lat, lng, name });
   });
 
   el.hidden = false;
@@ -444,6 +498,7 @@ function teslaMarkerContent() {
 function clearChargerMarkers() {
   chargerMarkers.forEach((m) => m.setMap(null));
   chargerMarkers.length = 0;
+  chargerData.length = 0;
 }
 
 function clearTeslaMarkers() {
@@ -452,11 +507,61 @@ function clearTeslaMarkers() {
 }
 
 // ---------------------------------------------------------------------------
+// Filter application (Task 11)
+// ---------------------------------------------------------------------------
+
+/**
+ * Determine whether a 환경부 station should be visible given the current filter.
+ * @param {object} station
+ * @returns {boolean}
+ */
+function chargerPassesFilter(station) {
+  // Speed filter
+  if (filter.speed === 'fast') {
+    const type = station.chargerType || station.chargerTypeCd || '';
+    // 급속: chargerType includes '급속' or DC-based type codes (01,02,03,04)
+    if (!type.includes('급속') && !/^(01|02|03|04)/.test(type)) return false;
+  }
+  if (filter.speed === 'slow') {
+    const type = station.chargerType || station.chargerTypeCd || '';
+    // 완속: chargerType includes '완속' or AC-based type codes (05,06,07)
+    if (!type.includes('완속') && !/^(05|06|07)/.test(type)) return false;
+  }
+
+  // Availability filter
+  if (filter.avail) {
+    const available = station.availableCount ?? 0;
+    if (available <= 0) return false;
+  }
+
+  return true;
+}
+
+/**
+ * Apply the current filter state to all existing markers.
+ * No API calls — just setMap(map) or setMap(null) on each marker.
+ */
+function applyFilter() {
+  // 환경부 markers
+  chargerMarkers.forEach((marker, i) => {
+    const station = chargerData[i];
+    const visible = station ? chargerPassesFilter(station) : false;
+    marker.setMap(visible ? map : null);
+  });
+
+  // Tesla markers
+  teslaMarkers.forEach((marker) => {
+    marker.setMap(filter.tesla ? map : null);
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Render 환경부 charger markers
 // ---------------------------------------------------------------------------
 
 /**
  * Render 환경부 charger markers onto the map.
+ * Stores raw station data in chargerData (parallel array) for filter reuse.
  * @param {object[]} stations
  */
 function renderChargerMarkers(stations) {
@@ -471,9 +576,12 @@ function renderChargerMarkers(stations) {
     const total     = station.totalCount     ?? 0;
     const latLng    = new naver.maps.LatLng(Number(lat), Number(lng));
 
+    // Determine initial visibility per current filter
+    const visible = chargerPassesFilter(station);
+
     const marker = new naver.maps.Marker({
       position: latLng,
-      map,
+      map: visible ? map : null,
       icon: {
         content: chargerMarkerContent(available, total),
         anchor:  new naver.maps.Point(18, 42), // tip of pin
@@ -488,6 +596,7 @@ function renderChargerMarkers(stations) {
     });
 
     chargerMarkers.push(marker);
+    chargerData.push(station); // store for filter re-evaluation
   });
 }
 
@@ -511,7 +620,7 @@ function renderTeslaMarkers(stations) {
 
     const marker = new naver.maps.Marker({
       position: latLng,
-      map,
+      map: filter.tesla ? map : null, // respect initial filter state
       icon: {
         content: teslaMarkerContent(),
         anchor:  new naver.maps.Point(18, 42), // tip of pin
@@ -559,9 +668,30 @@ async function loadTeslaChargers() {
  * Fetch chargers for the given centre and render markers.
  * Shows a loading overlay while the (potentially slow) API call runs.
  *
+ * Guards:
+ *   - chargerLoadInFlight: prevents duplicate concurrent requests
+ *   - lastLoadedCentre + MIN_MOVE_METRES: skips if centre barely moved
+ *
  * @param {{ lat: number, lng: number }} centre
+ * @param {{ force?: boolean }} [opts]  — force=true skips the min-distance guard
  */
-async function loadChargers(centre) {
+async function loadChargers(centre, { force = false } = {}) {
+  // Min-distance guard (skip if centre hasn't moved enough)
+  if (!force && lastLoadedCentre) {
+    const moved = haversine(lastLoadedCentre, centre);
+    if (moved < MIN_MOVE_METRES) {
+      console.debug(`[chargers] 중심 이동 ${Math.round(moved)}m < ${MIN_MOVE_METRES}m — 재조회 건너뜀`);
+      return;
+    }
+  }
+
+  // In-flight guard
+  if (chargerLoadInFlight) {
+    console.debug('[chargers] 이미 요청 중 — 중복 요청 건너뜀');
+    return;
+  }
+
+  chargerLoadInFlight = true;
   showLoading();
 
   let zscode = '';
@@ -590,10 +720,12 @@ async function loadChargers(centre) {
     // API may return { stations: [...] } or a bare array
     const stations = Array.isArray(data) ? data : (data.stations ?? data.items ?? []);
     renderChargerMarkers(stations);
+    lastLoadedCentre = centre; // update after successful load
   } catch (err) {
     console.error('[chargers] 불러오기 실패:', err.message);
     showRetryToast();
   } finally {
+    chargerLoadInFlight = false;
     hideLoading();
   }
 }
@@ -688,6 +820,261 @@ function resolveUserPosition() {
 }
 
 // ---------------------------------------------------------------------------
+// Naver Map directions (Task 11)
+// ---------------------------------------------------------------------------
+
+/**
+ * Open Naver Map directions to the given destination in a new tab.
+ *
+ * URL format used (Naver Maps web URL scheme — directions endpoint):
+ *   https://map.naver.com/p/directions/-/-/{dlng},{dlat},{dname}/-/walk?c={dlng},{dlat},15,0,0,0,dh
+ *
+ * This is the standard Naver Maps directions deep-link format (as of 2024–2025):
+ *   - Base: https://map.naver.com/p/directions/
+ *   - Origin: leave blank (uses current location on device) → represented as "-/-/"
+ *   - Destination: {lng},{lat},{name}
+ *   - Transport mode: walk (walking) — users can switch in the app
+ *
+ * Reference: Naver Maps URL scheme docs (https://navermaps.github.io/maps.js.ncp/docs/tutorial-8-Getting-Started-Maps-Service.html)
+ *   and confirmed pattern from https://map.naver.com share links.
+ *
+ * TODO (live verification): confirm the URL opens and sets the correct destination
+ *   once a valid NCP key is available. The coordinate order is lng,lat (not lat,lng).
+ *
+ * @param {{ lat: number|string, lng: number|string, name?: string }} dest
+ */
+function openNaverDirections({ lat, lng, name = '충전소' }) {
+  const dLat  = Number(lat).toFixed(7);
+  const dLng  = Number(lng).toFixed(7);
+  const dName = encodeURIComponent(name);
+
+  // Naver Maps directions URL:
+  // https://map.naver.com/p/directions/-/-/{dLng},{dLat},{dName}/-/walk
+  const url = `https://map.naver.com/p/directions/-/-/${dLng},${dLat},${dName}/-/walk`;
+
+  window.open(url, '_blank', 'noopener,noreferrer');
+}
+
+// ---------------------------------------------------------------------------
+// Filter chips (Task 11)
+// ---------------------------------------------------------------------------
+
+/**
+ * Wire filter chip click handlers.
+ * Chips toggle filter.speed / filter.tesla / filter.avail and call applyFilter().
+ * No API reload — visibility is toggled on existing markers.
+ */
+function wireFilterChips() {
+  const chips = document.querySelectorAll('.chip[data-filter]');
+
+  chips.forEach((chip) => {
+    chip.addEventListener('click', () => {
+      const f = chip.dataset.filter;
+
+      if (f === 'all') {
+        // 전체: reset all filters
+        filter.speed = null;
+        filter.tesla = true;
+        filter.avail = false;
+      } else if (f === 'fast') {
+        // 급속: mutually exclusive with 완속
+        filter.speed = filter.speed === 'fast' ? null : 'fast';
+      } else if (f === 'slow') {
+        // 완속: mutually exclusive with 급속
+        filter.speed = filter.speed === 'slow' ? null : 'slow';
+      } else if (f === 'tesla') {
+        filter.tesla = !filter.tesla;
+      } else if (f === 'avail') {
+        filter.avail = !filter.avail;
+      }
+
+      updateChipUI(chips);
+      applyFilter();
+    });
+  });
+}
+
+/**
+ * Sync chip visual state (chip--active class) to current filter.
+ * @param {NodeList} chips
+ */
+function updateChipUI(chips) {
+  // Determine if "전체" state (no active sub-filter):
+  const isAll = filter.speed === null && filter.tesla === true && filter.avail === false;
+
+  chips.forEach((chip) => {
+    const f = chip.dataset.filter;
+    let active = false;
+
+    if (f === 'all')   active = isAll;
+    if (f === 'fast')  active = filter.speed === 'fast';
+    if (f === 'slow')  active = filter.speed === 'slow';
+    if (f === 'tesla') active = filter.tesla;  // Tesla chip stays active while visible
+    if (f === 'avail') active = filter.avail;
+
+    chip.classList.toggle('chip--active', active);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// 2D / 상세 map type toggle (Task 11)
+// ---------------------------------------------------------------------------
+
+/**
+ * Wire the map type toggle button.
+ * Switches between NORMAL (2D) and HYBRID (satellite + labels).
+ */
+function wireMapTypeToggle() {
+  btnMapType.addEventListener('click', () => {
+    const currentMode = btnMapType.dataset.mode;
+
+    if (currentMode === 'normal') {
+      // Switch to HYBRID (상세/satellite)
+      map.setMapTypeId(naver.maps.MapTypeId.HYBRID);
+      btnMapType.dataset.mode = 'hybrid';
+      btnMapType.setAttribute('aria-label', '지도 유형 전환: 위성 지도 (상세)');
+      mapTypeLabelEl.textContent = '상세';
+      mapTypeIconNormal.hidden = true;
+      mapTypeIconHybrid.hidden = false;
+    } else {
+      // Switch back to NORMAL (2D)
+      map.setMapTypeId(naver.maps.MapTypeId.NORMAL);
+      btnMapType.dataset.mode = 'normal';
+      btnMapType.setAttribute('aria-label', '지도 유형 전환: 2D 지도');
+      mapTypeLabelEl.textContent = '2D';
+      mapTypeIconNormal.hidden = false;
+      mapTypeIconHybrid.hidden = true;
+    }
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Address search (Task 11)
+// ---------------------------------------------------------------------------
+
+/**
+ * Show the "검색 결과 없음" notice below the search bar.
+ * Auto-hides after 3 s.
+ */
+function showSearchNoResult() {
+  let el = document.getElementById('search-no-result');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'search-no-result';
+    el.className = 'search-no-result';
+    el.setAttribute('role', 'status');
+    el.setAttribute('aria-live', 'polite');
+    document.body.appendChild(el);
+  }
+  el.textContent = '검색 결과를 찾을 수 없습니다.';
+  el.hidden = false;
+  setTimeout(() => { el.hidden = true; }, 3000);
+}
+
+/**
+ * Geocode a query string via naver.maps.Service.geocode and move the map.
+ *
+ * Uses: naver.maps.Service.geocode({ query }, callback)
+ * On success: take first result's coords → map.setCenter → loadChargers.
+ * On no result or error: show "검색 결과 없음".
+ *
+ * TODO (live verification): naver.maps.Service.geocode requires the NCP key to have
+ *   the "Geocoding" API enabled. Test once a valid key is injected.
+ *
+ * @param {string} query
+ */
+async function geocodeAndMove(query) {
+  if (!query.trim()) return;
+
+  if (!window.naver?.maps?.Service) {
+    console.warn('[search] naver.maps.Service not available — key may be missing');
+    showSearchNoResult();
+    return;
+  }
+
+  naver.maps.Service.geocode({ query: query.trim() }, async (status, response) => {
+    if (status !== naver.maps.Service.Status.OK) {
+      console.warn('[search] geocode 실패 status:', status);
+      showSearchNoResult();
+      return;
+    }
+
+    const items = response?.v2?.addresses;
+    if (!items || items.length === 0) {
+      showSearchNoResult();
+      return;
+    }
+
+    // Take first result
+    const first = items[0];
+    const lat = parseFloat(first.y);
+    const lng = parseFloat(first.x);
+
+    if (isNaN(lat) || isNaN(lng)) {
+      showSearchNoResult();
+      return;
+    }
+
+    const centre = { lat, lng };
+    map.setCenter(new naver.maps.LatLng(lat, lng));
+    await loadChargers(centre, { force: true }); // force reload for explicit search
+  });
+}
+
+/**
+ * Wire the search input (Enter key + clear button).
+ */
+function wireSearch() {
+  // Remove readonly attribute (was placeholder until Task 11)
+  searchInput.removeAttribute('readonly');
+
+  // Show/hide clear button as user types
+  searchInput.addEventListener('input', () => {
+    searchClear.hidden = searchInput.value.length === 0;
+  });
+
+  // Clear button
+  searchClear.addEventListener('click', () => {
+    searchInput.value = '';
+    searchClear.hidden = true;
+    searchInput.focus();
+  });
+
+  // Submit on Enter
+  searchInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      searchInput.blur(); // dismiss mobile keyboard
+      geocodeAndMove(searchInput.value);
+    }
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Refetch on map move (Task 11)
+// ---------------------------------------------------------------------------
+
+/**
+ * Wire the map 'idle' event for auto-refetch after pan/zoom.
+ *
+ * Logic:
+ *   - Debounce: wait IDLE_DEBOUNCE_MS after idle fires before acting.
+ *   - In-flight guard: skip if a request is already running.
+ *   - Min-distance guard: skip if centre moved < MIN_MOVE_METRES from last load.
+ */
+function wireIdleRefetch() {
+  naver.maps.Event.addListener(map, 'idle', () => {
+    // Clear any pending debounce
+    if (idleDebounceTimer) clearTimeout(idleDebounceTimer);
+
+    idleDebounceTimer = setTimeout(() => {
+      const centre = map.getCenter();
+      loadChargers({ lat: centre.lat(), lng: centre.lng() });
+    }, IDLE_DEBOUNCE_MS);
+  });
+}
+
+// ---------------------------------------------------------------------------
 // GPS button
 // ---------------------------------------------------------------------------
 
@@ -720,10 +1107,22 @@ async function main() {
   loadTeslaChargers();
 
   // 5. Load 환경부 chargers for this centre (may be slow, shows overlay)
-  await loadChargers(pos);
+  await loadChargers(pos, { force: true });
 
   // 6. Wire GPS button for subsequent taps
   wireGpsButton();
+
+  // 7. Wire filter chips (Task 11)
+  wireFilterChips();
+
+  // 8. Wire 2D / 상세 map type toggle (Task 11)
+  wireMapTypeToggle();
+
+  // 9. Wire address search input (Task 11)
+  wireSearch();
+
+  // 10. Wire map idle → refetch on move (Task 11)
+  wireIdleRefetch();
 }
 
 // ---------------------------------------------------------------------------
