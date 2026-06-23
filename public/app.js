@@ -21,6 +21,13 @@ const SEOUL_CITY_HALL = { lat: 37.5663, lng: 126.9779 };
 const DEFAULT_ZOOM    = 14;
 const CHARGER_RADIUS  = 5000; // metres, passed to /api/chargers
 
+/**
+ * 화면에 동시에 그릴 충전소 마커 최대 개수. 서울처럼 밀집 지역은 충전소가
+ * 수백 개라 전부 그리면 모바일에서 지도가 버벅인다. 지도 중심에서 가까운 순
+ * 으로 이 개수만 그린다.
+ */
+const MAX_MARKERS = 150;
+
 // ---------------------------------------------------------------------------
 // Constants (Task 11 additions)
 // ---------------------------------------------------------------------------
@@ -770,7 +777,21 @@ function applyFilter() {
 function renderChargerMarkers(stations) {
   clearChargerMarkers();
 
-  stations.forEach((station) => {
+  // 성능: 지도 중심에서 가까운 순으로 최대 MAX_MARKERS개만 그린다 (모바일 버벅임 방지)
+  let list = stations;
+  let ref = null;
+  if (map && typeof map.getCenter === 'function') {
+    const c = map.getCenter();
+    ref = { lat: c.lat(), lng: c.lng() };
+  } else if (myPosition) {
+    ref = myPosition;
+  }
+  if (ref && stations.length > MAX_MARKERS) {
+    const ll = (s) => ({ lat: Number(s.lat ?? s.latitude), lng: Number(s.lng ?? s.longitude) });
+    list = [...stations].sort((a, b) => haversine(ref, ll(a)) - haversine(ref, ll(b))).slice(0, MAX_MARKERS);
+  }
+
+  list.forEach((station) => {
     const lat = station.lat ?? station.latitude;
     const lng = station.lng ?? station.longitude;
     if (!lat || !lng) return;
@@ -1045,7 +1066,9 @@ function resolveUserPosition() {
         showLocationNotice();
         resolve(SEOUL_CITY_HALL);
       },
-      { enableHighAccuracy: true, timeout: 8000, maximumAge: 60_000 }
+      // 모바일 GPS는 위성 잡는 데 시간이 걸려 8초로는 자주 끊긴다 → 20초로 늘림.
+      // 최근 위치 캐시(5분)도 허용해 첫 응답을 빠르게.
+      { enableHighAccuracy: true, timeout: 20_000, maximumAge: 300_000 }
     );
   });
 }
