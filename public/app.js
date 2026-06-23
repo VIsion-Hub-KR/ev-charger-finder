@@ -924,7 +924,7 @@ async function loadChargers(centre, { force = false } = {}) {
  * @returns {naver.maps.Map}
  */
 function initMap(centre) {
-  return new naver.maps.Map('map', {
+  const m = new naver.maps.Map('map', {
     center:     new naver.maps.LatLng(centre.lat, centre.lng),
     zoom:       DEFAULT_ZOOM,
     mapTypeId:  naver.maps.MapTypeId.NORMAL,
@@ -933,7 +933,32 @@ function initMap(centre) {
     mapDataControl: false,
     zoomControl:    false,
     mapTypeControl: false,
+    scrollWheel:    false, // 기본 휠 줌 끄고 아래 커스텀(민감도 절반) 사용
   });
+  installHalfZoom(m);
+  return m;
+}
+
+/**
+ * 확대/축소 민감도를 절반으로. 네이버 기본 휠 줌은 끄고, 휠 입력을 누적해
+ * 기본보다 약 2배 모여야 한 단계 줌이 바뀌도록 한다. (마우스 휠/트랙패드 기준.
+ * 모바일 핀치 줌은 OS가 제어하므로 영향 없음.)
+ * @param {naver.maps.Map} m
+ */
+function installHalfZoom(m) {
+  const el = document.getElementById('map');
+  if (!el) return;
+  let acc = 0;
+  const THRESHOLD = 240; // 클수록 둔감 (기본 대비 약 절반)
+  el.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    acc += e.deltaY;
+    if (Math.abs(acc) >= THRESHOLD) {
+      const dir = acc > 0 ? -1 : 1; // deltaY>0(아래로 스크롤)=축소
+      m.setZoom(m.getZoom() + dir, true);
+      acc = 0;
+    }
+  }, { passive: false });
 }
 
 // ---------------------------------------------------------------------------
