@@ -1,23 +1,19 @@
 import { parseItems, buildStations } from '../lib/chargers.js';
 import { haversineKm } from '../lib/geo.js';
 import { createCache } from '../lib/cache.js';
-import { regionFor } from '../lib/region.js';
 
 const BASE = 'https://apis.data.go.kr/B552584/EvCharger';
 const NUM_OF_ROWS = 9999;
-const MAX_PAGES = 12;
+const MAX_PAGES = 5; // 시군구 단위는 작으므로 5페이지면 충분
 
-// 모듈 수준 캐시: zcode → Station[] (2분 TTL)
-// 캐시 키는 zcode이므로 같은 시도 내 다른 좌표도 동일 캐시를 재사용.
+// 모듈 수준 캐시: zscode → Station[] (2분 TTL)
+// 캐시 키는 s:${zscode}이므로 같은 시군구 내 다른 좌표도 동일 캐시를 재사용.
 // 거리/반경 필터는 캐시 조회 이후 요청별로 수행.
 const cache = createCache({ ttlMs: 120_000 });
 
-// getChargerInfo carries its own stat field; the separate getChargerStatus
-// endpoint returns only ~1378 rows for Seoul vs ~9000+ from getChargerInfo,
-// so merging would leave most chargers showing 0 available (false 만차).
-// We therefore use getChargerInfo exclusively and pass its items as both
-// infoItems and statusItems to buildStations so every charger's own stat
-// field is picked up correctly.
+// getChargerInfo carries its own stat field; we use getChargerInfo exclusively
+// and pass its items as both infoItems and statusItems to buildStations so every
+// charger's own stat field is picked up correctly.
 
 /**
  * HTTP fetch with retry. Retries on 429/502/504 or non-NORMAL resultMsg.
@@ -56,19 +52,19 @@ function sleep(ms) {
 }
 
 /**
- * getChargerInfo 페이지네이션: numOfRows=9999로 반환 수가 numOfRows 미만이 될 때까지
- * 페이지를 순회한다. 최대 MAX_PAGES 페이지까지만 조회한다.
- * 실측 결과 서울(zcode=11) 기준 페이지2도 9999개의 중복 없는 행을 반환하므로
- * 단일 페이지로는 전체 데이터를 얻을 수 없다.
+ * getChargerInfo 페이지네이션 (시군구 단위).
+ * numOfRows=9999로 반환 수가 numOfRows 미만이 될 때까지 페이지를 순회한다.
+ * 최대 MAX_PAGES(5)까지만 조회하고, 도달 시 경고한다.
  */
-async function fetchAllInfoItems(fetchImpl, key, zcode) {
+async function fetchAllInfoItemsByZscode(fetchImpl, key, zscode) {
   const encoded = encodeURIComponent(key);
+  const zcode = String(zscode).slice(0, 2); // 시군구 앞 2자리 = 시도코드
   const allItems = [];
 
   for (let pageNo = 1; pageNo <= MAX_PAGES; pageNo++) {
     const url =
       `${BASE}/getChargerInfo` +
-      `?serviceKey=${encoded}&zcode=${zcode}&pageNo=${pageNo}` +
+      `?serviceKey=${encoded}&zcode=${zcode}&zscode=${zscode}&pageNo=${pageNo}` +
       `&numOfRows=${NUM_OF_ROWS}&dataType=JSON`;
 
     const json = await fetchWithRetry(fetchImpl, url);
@@ -81,7 +77,7 @@ async function fetchAllInfoItems(fetchImpl, key, zcode) {
     }
     if (pageNo === MAX_PAGES) {
       console.warn(
-        `[chargers] zcode=${zcode}: MAX_PAGES(${MAX_PAGES}) 도달. 데이터가 더 있을 수 있음.`,
+        `[chargers] zscode=${zscode}: MAX_PAGES(${MAX_PAGES}) 도달. 데이터가 더 있을 수 있음.`,
       );
     }
   }
@@ -92,32 +88,49 @@ async function fetchAllInfoItems(fetchImpl, key, zcode) {
 /**
  * 주어진 좌표 반경 내 충전소 목록을 거리 오름차순으로 반환한다.
  *
- * @param {{ lat: number, lng: number, radiusKm?: number, fetchImpl?: Function, key: string }} opts
+ * @param {{ lat: number, lng: number, radiusKm?: number, zscodes: string[], fetchImpl?: Function, key: string }} opts
  * @returns {Promise<Station[]>}
  */
 export async function fetchStations({
   lat,
   lng,
   radiusKm = 10,
+  zscodes,
   fetchImpl = globalThis.fetch,
   key,
 }) {
-  const zcode = regionFor(lat, lng);
-  const cacheKey = `z:${zcode}`;
+  // 각 시군구별로 캐시 조회 → 미스 시 API 호출 → Station[] 빌드 후 캐시 저장
+  const perZscodeStations = await Promise.all(
+    zscodes.map(async (zscode) => {
+      const cacheKey = `s:${zscode}`;
+      let stations = cache.get(cacheKey);
 
-  let stations = cache.get(cacheKey);
+      if (!stations) {
+        const infoItems = await fetchAllInfoItemsByZscode(fetchImpl, key, zscode);
+        // infoItems를 info와 status 양쪽에 전달해 stat 필드를 자기 자신에서 읽도록 한다.
+        stations = buildStations(infoItems, infoItems);
+        cache.set(cacheKey, stations);
+      }
 
-  if (!stations) {
-    const infoItems = await fetchAllInfoItems(fetchImpl, key, zcode);
+      return stations;
+    }),
+  );
 
-    // infoItems를 info와 status 양쪽에 전달해 stat 필드를 자기 자신에서 읽도록 한다.
-    stations = buildStations(infoItems, infoItems);
-    cache.set(cacheKey, stations);
+  // 여러 시군구 결과를 합치고 statId 기준으로 중복 제거
+  const seenIds = new Set();
+  const allStations = [];
+  for (const list of perZscodeStations) {
+    for (const s of list) {
+      if (!seenIds.has(s.statId)) {
+        seenIds.add(s.statId);
+        allStations.push(s);
+      }
+    }
   }
 
   // 거리 계산 및 필터/정렬은 캐시 이후 요청별로 수행 (origin이 요청마다 다를 수 있음)
   const origin = { lat, lng };
-  return stations
+  return allStations
     .map((s) => ({
       ...s,
       distanceKm: Number(haversineKm(origin, { lat: s.lat, lng: s.lng }).toFixed(1)),
@@ -128,21 +141,30 @@ export async function fetchStations({
 
 /**
  * Vercel 서버리스 핸들러.
- * GET /api/chargers?lat=&lng=&radius=
+ * GET /api/chargers?lat=&lng=&radius=&zscode=11680 (comma-separated for multiple)
  */
 export default async function handler(req, res) {
   try {
-    const { lat, lng, radius } = req.query;
+    const { lat, lng, radius, zscode } = req.query;
 
     if (!lat || !lng) {
       res.status(400).json({ error: 'lat and lng query parameters are required' });
       return;
     }
 
+    if (!zscode) {
+      res.status(400).json({ error: 'zscode query parameter is required' });
+      return;
+    }
+
+    // zscode는 단일값 또는 콤마 구분 복수값
+    const zscodes = String(zscode).split(',').map((s) => s.trim()).filter(Boolean);
+
     const stations = await fetchStations({
       lat: Number(lat),
       lng: Number(lng),
       radiusKm: Number(radius) || 10,
+      zscodes,
       key: process.env.DATA_GO_KR_KEY,
     });
 
