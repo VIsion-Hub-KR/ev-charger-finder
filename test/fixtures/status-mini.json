@@ -1,0 +1,39 @@
+{
+  "resultCode": "00",
+  "resultMsg": "NORMAL SERVICE.",
+  "totalCount": 3,
+  "items": {
+    "item": [
+      {
+        "busiId": "ME",
+        "statId": "ME174013",
+        "chgerId": "01",
+        "stat": "2",
+        "statUpdDt": "20260623164407",
+        "lastTsdt": "20260623154827",
+        "lastTedt": "20260623162453",
+        "nowTsdt": ""
+      },
+      {
+        "busiId": "ME",
+        "statId": "ME174027",
+        "chgerId": "01",
+        "stat": "2",
+        "statUpdDt": "20260623164408",
+        "lastTsdt": "20260623061559",
+        "lastTedt": "20260623070219",
+        "nowTsdt": ""
+      },
+      {
+        "busiId": "ME",
+        "statId": "ME174029",
+        "chgerId": "01",
+        "stat": "2",
+        "statUpdDt": "20260623164417",
+        "lastTsdt": "20260623150335",
+        "lastTedt": "20260623154937",
+        "nowTsdt": ""
+      }
+    ]
+  }
+}
