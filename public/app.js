@@ -1084,8 +1084,10 @@ async function loadChargers(centre, { force = false, liveOnly = false } = {}) {
       renderChargerMarkers(cachedStations);
       lastLoadedCentre = centre;
 
-      // Show freshness: "N분 전 기준 · 갱신 중…"
-      showFreshness(buildFreshnessText(cachedStations, true));
+      // 자동 백그라운드 라이브 갱신은 하지 않는다(공공 API가 100초+라 "갱신 중"이
+      // 계속 떠 있고 탭까지 막혀 못 쓰겠다는 피드백). 갱신은 새로고침 버튼으로만.
+      showFreshness(buildFreshnessText(cachedStations, false));
+      return;
     }
   }
 
