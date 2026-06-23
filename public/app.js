@@ -1247,35 +1247,52 @@ function setMyLocationMarker(position) {
 /**
  * Show the non-blocking "location unavailable" notice. Auto-hides after 4 s.
  */
-function showLocationNotice() {
+function showLocationNotice(msg) {
+  const span = locationNoticeEl.querySelector('span');
+  if (span && msg) span.textContent = msg;
   locationNoticeEl.hidden = false;
-  setTimeout(() => { locationNoticeEl.hidden = true; }, 4000);
+  setTimeout(() => { locationNoticeEl.hidden = true; }, 6000);
 }
 
 /**
  * Request the user's current position.
- * Resolves with the position, or falls back to SEOUL_CITY_HALL.
+ * 1차 고정밀(GPS) → 실패 시 2차 저정밀(와이파이/셀, 실내에서도 잘 잡힘) → 그래도 실패면
+ * 사유별 안내 + 서울시청 폴백.
  * @returns {Promise<{ lat: number, lng: number }>}
  */
 function resolveUserPosition() {
   return new Promise((resolve) => {
     if (!('geolocation' in navigator)) {
-      showLocationNotice();
+      showLocationNotice('이 브라우저는 위치를 지원하지 않아 서울시청 기준으로 표시합니다.');
       resolve(SEOUL_CITY_HALL);
       return;
     }
 
+    const ok = (pos) => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+
+    const onFinalError = (err) => {
+      let msg = '위치를 가져올 수 없어 서울시청 기준으로 표시합니다.';
+      if (err && err.code === 1) {
+        msg = '위치 권한이 꺼져 있어요. Safari 설정 → 위치 허용 후 📍 버튼을 누르세요.';
+      } else if (err && err.code === 3) {
+        msg = '위치 잡기가 지연돼요(실내일 수 있음). 📍 버튼을 다시 눌러보세요.';
+      }
+      showLocationNotice(msg);
+      resolve(SEOUL_CITY_HALL);
+    };
+
+    // 1차: 고정밀(GPS) — 빠르게 8초만
     navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+      ok,
+      () => {
+        // 2차: 저정밀(와이파이/셀) — 실내·GPS 약할 때도 잘 잡힘
+        navigator.geolocation.getCurrentPosition(
+          ok,
+          onFinalError,
+          { enableHighAccuracy: false, timeout: 15_000, maximumAge: 600_000 }
+        );
       },
-      (_err) => {
-        showLocationNotice();
-        resolve(SEOUL_CITY_HALL);
-      },
-      // 모바일 GPS는 위성 잡는 데 시간이 걸려 8초로는 자주 끊긴다 → 20초로 늘림.
-      // 최근 위치 캐시(5분)도 허용해 첫 응답을 빠르게.
-      { enableHighAccuracy: true, timeout: 20_000, maximumAge: 300_000 }
+      { enableHighAccuracy: true, timeout: 8_000, maximumAge: 300_000 }
     );
   });
 }
