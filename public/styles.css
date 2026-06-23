@@ -617,3 +617,208 @@ body {
 .btn-directions-tesla {
   background: #e31937;
 }
+
+/* ============================================================
+   Task 12 — Feature 1: Destination pin
+   ============================================================ */
+
+/* Wrapper so the label can sit below the SVG */
+.dest-pin-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  filter: drop-shadow(0 3px 6px rgba(28, 110, 242, 0.40));
+  cursor: default;
+  transition: transform 0.12s ease;
+}
+
+.dest-pin-wrap:hover {
+  transform: translateY(-2px);
+}
+
+/* Small label under the pin */
+.dest-pin-label {
+  background: #1c6ef2;
+  color: #fff;
+  font-family:
+    "Apple SD Gothic Neo",
+    "Pretendard",
+    -apple-system,
+    BlinkMacSystemFont,
+    sans-serif;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.2;
+  padding: 2px 7px;
+  border-radius: 8px;
+  white-space: nowrap;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  word-break: keep-all;
+  pointer-events: none;
+}
+
+/* ============================================================
+   Task 12 — Feature 2: Nearby stations panel
+   ============================================================ */
+
+.nearby-sheet {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 200; /* below detail-sheet (400) but above map (0) */
+  background: #fff;
+  border-radius: 20px 20px 0 0;
+  box-shadow: 0 -4px 24px rgba(0, 0, 0, 0.12);
+  display: flex;
+  flex-direction: column;
+  transition: transform 0.28s cubic-bezier(0.32, 0.72, 0, 1);
+  /* Let safe-area inset bottom show through */
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  /* Cap max-width for tablets */
+  max-width: 600px;
+  margin: 0 auto;
+}
+
+/* Peek state: only the handle is visible (~56 px) */
+.nearby-sheet--peek {
+  transform: translateY(calc(100% - 56px));
+}
+
+/* Expanded state: show list up to 55vh */
+.nearby-sheet--expanded {
+  transform: translateY(0);
+  max-height: 55vh;
+}
+
+/* Handle (drag bar + label row) */
+.nearby-handle {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 10px 16px 8px;
+  cursor: pointer;
+  flex-shrink: 0;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+}
+
+.nearby-handle:focus-visible {
+  outline: 3px solid #e31937;
+  outline-offset: 2px;
+  border-radius: 20px 20px 0 0;
+}
+
+.nearby-handle-bar {
+  width: 36px;
+  height: 4px;
+  border-radius: 2px;
+  background: #ddd;
+  margin-bottom: 8px;
+  flex-shrink: 0;
+}
+
+.nearby-handle-label {
+  font-family:
+    "Apple SD Gothic Neo",
+    "Pretendard",
+    -apple-system,
+    BlinkMacSystemFont,
+    sans-serif;
+  font-size: 13px;
+  font-weight: 700;
+  color: #1a1a1a;
+  letter-spacing: -0.01em;
+}
+
+/* Scrollable list body */
+.nearby-list {
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  flex: 1;
+  /* Inset padding so last item isn't clipped */
+  padding: 0 0 12px;
+}
+
+/* Empty state */
+.nearby-empty {
+  padding: 20px 20px;
+  font-size: 13px;
+  color: #888;
+  text-align: center;
+  word-break: keep-all;
+}
+
+/* Individual station row */
+.nearby-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 18px;
+  min-height: 56px; /* 44px+ touch target */
+  border-bottom: 1px solid #f2f2f2;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: background 0.1s ease;
+}
+
+.nearby-row:last-child {
+  border-bottom: none;
+}
+
+.nearby-row:active {
+  background: #f8f8f8;
+}
+
+.nearby-row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+  min-width: 0; /* prevent overflow in flex */
+}
+
+.nearby-row-name {
+  font-size: 14px;
+  font-weight: 700;
+  color: #1a1a1a;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  word-break: keep-all;
+  line-height: 1.3;
+}
+
+.nearby-row-avail {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.nearby-row-dist {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: #999;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* ============================================================
+   Task 12 — Feature 3: Loading overlay elapsed time
+   (Only needs .loading-sub to be non-italic; existing .loading-sub
+    already sets color:#888 and line-height. We just ensure the
+    elapsed text shows a live monospace count without layout jump.)
+   ============================================================ */
+
+#loading-elapsed {
+  font-variant-numeric: tabular-nums; /* keep layout stable as seconds tick */
+}

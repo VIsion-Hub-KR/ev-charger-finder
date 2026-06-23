@@ -1,19 +1,12 @@
 /**
  * app.js — Task 11: Filter chips, 2D/상세 map toggle, address search,
  *                   refetch-on-move, 길찾기 directions
+ *          Task 12 (UX improvements):
+ *                   1. Search destination pin (persists across pan/zoom, clears on ×)
+ *                   2. Nearby stations list (collapsible bottom panel, filter-aware)
+ *                   3. Loading overlay: live elapsed-seconds counter
  *
  * Builds on Task 10. All previous functionality preserved.
- *
- * New in Task 11:
- *   1. Filter chips (전체/급속/완속/테슬라/빈자리) — show/hide existing markers
- *   2. 2D / 상세 map type toggle (NORMAL ↔ HYBRID)
- *   3. Address search via naver.maps.Service.geocode → map.setCenter + reload
- *   4. Refetch chargers on map idle (debounced 400 ms, min-distance guard, in-flight guard)
- *   5. 길찾기 button → Naver Map directions deep link (new tab)
- *
- * TODO (live verification): All Naver SDK service calls (geocode, reverseGeocode) require
- *   a valid NCP key with the appropriate plan. Replace __NAVER_MAP_CLIENT_ID__ in index.html
- *   before testing in browser.
  */
 
 'use strict';
@@ -98,6 +91,23 @@ let chargerLoadInFlight = false;
 
 /** Timer handle for the debounced idle refetch. */
 let idleDebounceTimer = null;
+
+// ---------------------------------------------------------------------------
+// Destination pin state (Task 12 — Feature 1)
+// ---------------------------------------------------------------------------
+
+/** @type {naver.maps.Marker|null} — Destination pin placed after a successful search. */
+let destMarker = null;
+
+// ---------------------------------------------------------------------------
+// Loading elapsed-time state (Task 12 — Feature 3)
+// ---------------------------------------------------------------------------
+
+/** Start time of the current loading operation (ms). */
+let loadingStartTime = null;
+
+/** Interval handle for the elapsed-time counter. */
+let loadingTimerInterval = null;
 
 // ---------------------------------------------------------------------------
 // DOM refs (populated after DOMContentLoaded / inline script)
@@ -240,24 +250,48 @@ function getZscode(latLng) {
 let loadingOverlay = null;
 
 function showLoading() {
+  // Record start time for elapsed counter
+  loadingStartTime = Date.now();
+
   if (loadingOverlay) {
     loadingOverlay.hidden = false;
-    return;
+  } else {
+    loadingOverlay = document.createElement('div');
+    loadingOverlay.className = 'loading-overlay';
+    loadingOverlay.setAttribute('role', 'status');
+    loadingOverlay.setAttribute('aria-live', 'polite');
+    loadingOverlay.innerHTML = `
+      <div class="loading-card">
+        <div class="loading-spinner" aria-hidden="true"></div>
+        <div>
+          <p class="loading-title">충전소 불러오는 중…</p>
+          <p class="loading-sub" id="loading-elapsed">0초 경과 / 보통 30~60초 소요</p>
+        </div>
+      </div>`;
+    document.body.appendChild(loadingOverlay);
   }
-  loadingOverlay = document.createElement('div');
-  loadingOverlay.className = 'loading-overlay';
-  loadingOverlay.setAttribute('role', 'status');
-  loadingOverlay.setAttribute('aria-live', 'polite');
-  loadingOverlay.innerHTML = `
-    <div class="loading-card">
-      <div class="loading-spinner" aria-hidden="true"></div>
-      <p class="loading-title">충전소 불러오는 중…</p>
-      <p class="loading-sub">공공데이터가 조금 느려요</p>
-    </div>`;
-  document.body.appendChild(loadingOverlay);
+
+  // Reset the elapsed text element
+  const elapsedEl = document.getElementById('loading-elapsed');
+  if (elapsedEl) elapsedEl.textContent = '0초 경과 / 보통 30~60초 소요';
+
+  // Clear any previous interval
+  if (loadingTimerInterval) clearInterval(loadingTimerInterval);
+
+  loadingTimerInterval = setInterval(() => {
+    const el = document.getElementById('loading-elapsed');
+    if (!el) return;
+    const elapsed = Math.floor((Date.now() - loadingStartTime) / 1000);
+    el.textContent = `${elapsed}초 경과 / 보통 30~60초 소요`;
+  }, 1000);
 }
 
 function hideLoading() {
+  if (loadingTimerInterval) {
+    clearInterval(loadingTimerInterval);
+    loadingTimerInterval = null;
+  }
+  loadingStartTime = null;
   if (loadingOverlay) loadingOverlay.hidden = true;
 }
 
@@ -394,6 +428,9 @@ function openChargerSheet(station) {
     openNaverDirections({ lat, lng, name });
   });
 
+  // Collapse nearby sheet so it doesn't fight with the detail sheet (Feature 2)
+  collapseNearbySheet();
+
   el.hidden = false;
 }
 
@@ -452,6 +489,9 @@ function openTeslaSheet(station) {
   el.querySelector('.btn-directions-tesla').addEventListener('click', () => {
     openNaverDirections({ lat, lng, name });
   });
+
+  // Collapse nearby sheet so it doesn't fight with the detail sheet (Feature 2)
+  collapseNearbySheet();
 
   el.hidden = false;
 }
@@ -526,6 +566,80 @@ function clearTeslaMarkers() {
 }
 
 // ---------------------------------------------------------------------------
+// Destination pin (Task 12 — Feature 1)
+// ---------------------------------------------------------------------------
+
+/**
+ * SVG content for the destination pin.
+ * A classic teardrop shape in #1c6ef2 (blue accent), with a white center dot.
+ * Distinct from charger pins (pill shape) and Tesla pins (red bolt).
+ *
+ * @param {string} [label] — Optional short label (searched name) shown below the pin.
+ * @returns {string}
+ */
+function destPinContent(label) {
+  const safeLabel = label ? String(label).slice(0, 12) : '';
+  const labelPart = safeLabel
+    ? `<div class="dest-pin-label">${safeLabel}</div>`
+    : '';
+  return `
+<div class="dest-pin-wrap" aria-hidden="true">
+  <svg xmlns="http://www.w3.org/2000/svg" width="32" height="44" viewBox="0 0 32 44" class="dest-pin">
+    <!-- Teardrop body: circle top + pointed bottom -->
+    <path d="M16 2 C7.163 2 2 9.163 2 16 C2 26 16 42 16 42 C16 42 30 26 30 16 C30 9.163 24.837 2 16 2 Z"
+          fill="#1c6ef2" />
+    <!-- White inner circle -->
+    <circle cx="16" cy="16" r="6" fill="#ffffff" />
+  </svg>
+  ${labelPart}
+</div>`.trim();
+}
+
+/**
+ * Place (or replace) the destination pin at the given coordinates.
+ * The pin persists across map pan/zoom and is only removed by clearDestPin().
+ *
+ * @param {{ lat: number, lng: number }} coords
+ * @param {string} [label] — Searched name to show under the pin.
+ */
+function setDestPin(coords, label) {
+  const latLng = new naver.maps.LatLng(coords.lat, coords.lng);
+
+  if (destMarker) {
+    // Reuse existing marker — update position and icon
+    destMarker.setPosition(latLng);
+    destMarker.setIcon({
+      content: destPinContent(label),
+      anchor:  new naver.maps.Point(16, 44), // tip of the teardrop
+    });
+    destMarker.setMap(map);
+    return;
+  }
+
+  destMarker = new naver.maps.Marker({
+    position: latLng,
+    map,
+    icon: {
+      content: destPinContent(label),
+      anchor:  new naver.maps.Point(16, 44),
+    },
+    title:     label || '검색 결과',
+    clickable: false,
+    zIndex:    150,
+  });
+}
+
+/**
+ * Remove the destination pin from the map.
+ */
+function clearDestPin() {
+  if (destMarker) {
+    destMarker.setMap(null);
+    // Don't null it — reuse object next time
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Filter application (Task 11)
 // ---------------------------------------------------------------------------
 
@@ -572,6 +686,9 @@ function applyFilter() {
   teslaMarkers.forEach((marker) => {
     marker.setMap(filter.tesla ? map : null);
   });
+
+  // Refresh nearby list to reflect new filter state (Feature 2)
+  if (nearbySheetEl) renderNearbyList();
 }
 
 // ---------------------------------------------------------------------------
@@ -617,6 +734,9 @@ function renderChargerMarkers(stations) {
     chargerMarkers.push(marker);
     chargerData.push(station); // store for filter re-evaluation
   });
+
+  // Refresh the nearby list after all markers are placed
+  if (nearbySheetEl) renderNearbyList();
 }
 
 // ---------------------------------------------------------------------------
@@ -1024,9 +1144,16 @@ async function geocodeAndMove(query) {
 
   const r = results[0];
   const centre = { lat: r.lat, lng: r.lng };
+
+  // Feature 1: drop/move destination pin at the search result coordinate
+  setDestPin(centre, r.name || query.trim());
+
   map.setCenter(new naver.maps.LatLng(r.lat, r.lng));
   map.setZoom(DEFAULT_ZOOM);
   await loadChargers(centre, { force: true }); // force reload for explicit search
+
+  // Update nearby list after new chargers load
+  renderNearbyList();
 }
 
 /**
@@ -1041,11 +1168,12 @@ function wireSearch() {
     searchClear.hidden = searchInput.value.length === 0;
   });
 
-  // Clear button
+  // Clear button — also removes destination pin (Feature 1)
   searchClear.addEventListener('click', () => {
     searchInput.value = '';
     searchClear.hidden = true;
     searchInput.focus();
+    clearDestPin();
   });
 
   // Submit on Enter
@@ -1083,6 +1211,186 @@ function wireIdleRefetch() {
 }
 
 // ---------------------------------------------------------------------------
+// Nearby stations list (Task 12 — Feature 2)
+// ---------------------------------------------------------------------------
+
+/** @type {HTMLElement|null} */
+let nearbySheetEl = null;
+
+/** Whether the nearby sheet is expanded or in peek state. */
+let nearbyExpanded = false;
+
+/**
+ * Ensure the nearby stations panel exists in the DOM.
+ * Structure:
+ *   .nearby-sheet
+ *     .nearby-handle  ← tap/drag to toggle expand
+ *       .nearby-handle-bar
+ *       .nearby-handle-label (text: "주변 충전소 N곳")
+ *     .nearby-list    ← scrollable list of stations
+ * @returns {HTMLElement}
+ */
+function ensureNearbySheet() {
+  if (nearbySheetEl) return nearbySheetEl;
+
+  nearbySheetEl = document.createElement('div');
+  nearbySheetEl.id = 'nearby-sheet';
+  nearbySheetEl.className = 'nearby-sheet nearby-sheet--peek';
+  nearbySheetEl.setAttribute('aria-label', '주변 충전소 목록');
+
+  nearbySheetEl.innerHTML = `
+    <div class="nearby-handle" id="nearby-handle" role="button" aria-label="주변 충전소 목록 펼치기" tabindex="0">
+      <div class="nearby-handle-bar" aria-hidden="true"></div>
+      <span class="nearby-handle-label" id="nearby-handle-label">주변 충전소</span>
+    </div>
+    <div class="nearby-list" id="nearby-list" role="list"></div>`;
+
+  document.body.appendChild(nearbySheetEl);
+
+  const handle = nearbySheetEl.querySelector('#nearby-handle');
+
+  function toggleNearby() {
+    nearbyExpanded = !nearbyExpanded;
+    nearbySheetEl.classList.toggle('nearby-sheet--expanded', nearbyExpanded);
+    nearbySheetEl.classList.toggle('nearby-sheet--peek', !nearbyExpanded);
+    handle.setAttribute('aria-label', nearbyExpanded ? '주변 충전소 목록 닫기' : '주변 충전소 목록 펼치기');
+  }
+
+  handle.addEventListener('click', toggleNearby);
+  handle.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleNearby(); }
+  });
+
+  return nearbySheetEl;
+}
+
+/**
+ * Collapse the nearby sheet to its peek state.
+ * Called when the detail sheet opens, so the two panels don't fight for space.
+ */
+function collapseNearbySheet() {
+  if (!nearbySheetEl) return;
+  nearbyExpanded = false;
+  nearbySheetEl.classList.remove('nearby-sheet--expanded');
+  nearbySheetEl.classList.add('nearby-sheet--peek');
+  const handle = nearbySheetEl.querySelector('#nearby-handle');
+  if (handle) handle.setAttribute('aria-label', '주변 충전소 목록 펼치기');
+}
+
+/**
+ * Build the row HTML for one 환경부 station in the nearby list.
+ * @param {object} station
+ * @param {number} dist — distance in metres from myPosition
+ * @returns {string}
+ */
+function nearbyRowHtml(station, dist) {
+  const name        = station.stationName || station.statNm || '충전소';
+  const available   = station.availableCount ?? 0;
+  const total       = station.totalCount     ?? 0;
+  const type        = station.chargerType || '';
+  const isFast      = type.includes('급속') || /^(01|02|03|04)/.test(type);
+  const speedLabel  = isFast ? '급속' : '완속';
+  const availColor  = available > 0 ? '#1c9e52' : '#b0b0b0';
+  const distLabel   = fmtDistance(dist);
+
+  // Plug icon SVG (inline, no emoji)
+  const plugIconSvg = `
+    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"
+         fill="none" stroke="${availColor}" stroke-width="2.5"
+         stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M5 2v6"/>
+      <path d="M19 2v6"/>
+      <path d="M5 8a7 7 0 0 0 14 0"/>
+      <line x1="12" y1="15" x2="12" y2="22"/>
+    </svg>`.trim();
+
+  // Distance icon
+  const distIconSvg = `
+    <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24"
+         fill="none" stroke="#aaa" stroke-width="2"
+         stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <circle cx="12" cy="12" r="3"/>
+      <line x1="12" y1="2"  x2="12" y2="6"/>
+      <line x1="12" y1="18" x2="12" y2="22"/>
+      <line x1="2"  y1="12" x2="6"  y2="12"/>
+      <line x1="18" y1="12" x2="22" y2="12"/>
+    </svg>`.trim();
+
+  return `
+    <div class="nearby-row" role="listitem" data-lat="${station.lat ?? station.latitude}" data-lng="${station.lng ?? station.longitude}">
+      <div class="nearby-row-main">
+        <span class="nearby-row-name">${name}</span>
+        <span class="nearby-row-avail" style="color:${availColor}">
+          ${plugIconSvg}
+          ${speedLabel} ${available}/${total}
+        </span>
+      </div>
+      <div class="nearby-row-dist">
+        ${distIconSvg}
+        <span>${distLabel}</span>
+      </div>
+    </div>`.trim();
+}
+
+/**
+ * Render (or re-render) the nearby stations list.
+ * Reads from chargerData, applies the current filter, sorts by distance from myPosition.
+ * If myPosition is null, falls back to the current map centre.
+ */
+function renderNearbyList() {
+  const sheet   = ensureNearbySheet();
+  const listEl  = document.getElementById('nearby-list');
+  const labelEl = document.getElementById('nearby-handle-label');
+  if (!listEl || !labelEl) return;
+
+  // Use myPosition or current map centre as origin
+  const origin = myPosition || (() => {
+    const c = map.getCenter();
+    return { lat: c.lat(), lng: c.lng() };
+  })();
+
+  // Filter + compute distance for each station
+  const rows = chargerData
+    .map((station, i) => {
+      // Respect current visibility (filter) by checking marker state
+      const marker = chargerMarkers[i];
+      if (!marker || marker.getMap() === null) return null;
+
+      const lat = station.lat ?? station.latitude;
+      const lng = station.lng ?? station.longitude;
+      if (!lat || !lng) return null;
+
+      const dist = haversine(origin, { lat: Number(lat), lng: Number(lng) });
+      return { station, dist, idx: i };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.dist - b.dist);
+
+  labelEl.textContent = `주변 충전소 ${rows.length}곳`;
+
+  if (rows.length === 0) {
+    listEl.innerHTML = `<div class="nearby-empty">현재 필터에 맞는 충전소가 없습니다.</div>`;
+    return;
+  }
+
+  listEl.innerHTML = rows.map(({ station, dist }) => nearbyRowHtml(station, dist)).join('');
+
+  // Wire tap on each row → focus marker + open detail sheet
+  listEl.querySelectorAll('.nearby-row').forEach((row, i) => {
+    row.addEventListener('click', () => {
+      const { station } = rows[i];
+      const lat = Number(station.lat ?? station.latitude);
+      const lng = Number(station.lng ?? station.longitude);
+      if (lat && lng) {
+        map.setCenter(new naver.maps.LatLng(lat, lng));
+      }
+      collapseNearbySheet();
+      openChargerSheet(station);
+    });
+  });
+}
+
+// ---------------------------------------------------------------------------
 // GPS button
 // ---------------------------------------------------------------------------
 
@@ -1116,6 +1424,10 @@ async function main() {
 
   // 5. Load 환경부 chargers for this centre (may be slow, shows overlay)
   await loadChargers(pos, { force: true });
+
+  // 5b. Init nearby sheet (Feature 2) — renders after chargers are loaded
+  ensureNearbySheet();
+  renderNearbyList();
 
   // 6. Wire GPS button for subsequent taps
   wireGpsButton();
