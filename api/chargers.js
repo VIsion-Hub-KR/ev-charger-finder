@@ -4,11 +4,90 @@ import { createCache } from '../lib/cache.js';
 import { regionFor } from '../lib/region.js';
 
 const BASE = 'https://apis.data.go.kr/B552584/EvCharger';
+const NUM_OF_ROWS = 9999;
+const MAX_PAGES = 12;
 
 // 모듈 수준 캐시: zcode → Station[] (2분 TTL)
 // 캐시 키는 zcode이므로 같은 시도 내 다른 좌표도 동일 캐시를 재사용.
 // 거리/반경 필터는 캐시 조회 이후 요청별로 수행.
 const cache = createCache({ ttlMs: 120_000 });
+
+// getChargerInfo carries its own stat field; the separate getChargerStatus
+// endpoint returns only ~1378 rows for Seoul vs ~9000+ from getChargerInfo,
+// so merging would leave most chargers showing 0 available (false 만차).
+// We therefore use getChargerInfo exclusively and pass its items as both
+// infoItems and statusItems to buildStations so every charger's own stat
+// field is picked up correctly.
+
+/**
+ * HTTP fetch with retry. Retries on 429/502/504 or non-NORMAL resultMsg.
+ * @param {Function} fetchImpl
+ * @param {string} url
+ * @param {{ retries?: number, backoffMs?: number }} opts
+ */
+async function fetchWithRetry(fetchImpl, url, { retries = 3, backoffMs = 800 } = {}) {
+  let lastErr;
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      const res = await fetchImpl(url);
+      if ([429, 502, 504].includes(res.status)) {
+        lastErr = new Error(`HTTP ${res.status}`);
+        if (attempt < retries) await sleep(backoffMs);
+        continue;
+      }
+      const text = await res.text();
+      const json = JSON.parse(text);
+      if (typeof json?.resultMsg === 'string' && !json.resultMsg.includes('NORMAL')) {
+        lastErr = new Error(`API error: ${json.resultMsg}`);
+        if (attempt < retries) await sleep(backoffMs);
+        continue;
+      }
+      return json;
+    } catch (e) {
+      lastErr = e;
+      if (attempt < retries) await sleep(backoffMs);
+    }
+  }
+  throw lastErr;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * getChargerInfo 페이지네이션: numOfRows=9999로 반환 수가 numOfRows 미만이 될 때까지
+ * 페이지를 순회한다. 최대 MAX_PAGES 페이지까지만 조회한다.
+ * 실측 결과 서울(zcode=11) 기준 페이지2도 9999개의 중복 없는 행을 반환하므로
+ * 단일 페이지로는 전체 데이터를 얻을 수 없다.
+ */
+async function fetchAllInfoItems(fetchImpl, key, zcode) {
+  const encoded = encodeURIComponent(key);
+  const allItems = [];
+
+  for (let pageNo = 1; pageNo <= MAX_PAGES; pageNo++) {
+    const url =
+      `${BASE}/getChargerInfo` +
+      `?serviceKey=${encoded}&zcode=${zcode}&pageNo=${pageNo}` +
+      `&numOfRows=${NUM_OF_ROWS}&dataType=JSON`;
+
+    const json = await fetchWithRetry(fetchImpl, url);
+    const items = parseItems(json);
+    allItems.push(...items);
+
+    if (items.length < NUM_OF_ROWS) {
+      // 마지막 페이지 도달
+      break;
+    }
+    if (pageNo === MAX_PAGES) {
+      console.warn(
+        `[chargers] zcode=${zcode}: MAX_PAGES(${MAX_PAGES}) 도달. 데이터가 더 있을 수 있음.`,
+      );
+    }
+  }
+
+  return allItems;
+}
 
 /**
  * 주어진 좌표 반경 내 충전소 목록을 거리 오름차순으로 반환한다.
@@ -29,23 +108,10 @@ export async function fetchStations({
   let stations = cache.get(cacheKey);
 
   if (!stations) {
-    // key는 절대 로그에 노출하지 않음
-    const encoded = encodeURIComponent(key);
-    const common = `serviceKey=${encoded}&numOfRows=9999&pageNo=1&dataType=JSON&zcode=${zcode}`;
+    const infoItems = await fetchAllInfoItems(fetchImpl, key, zcode);
 
-    const [infoRes, statusRes] = await Promise.all([
-      fetchImpl(`${BASE}/getChargerInfo?${common}`),
-      fetchImpl(`${BASE}/getChargerStatus?${common}`),
-    ]);
-
-    const infoRaw = JSON.parse(await infoRes.text());
-    const statusRaw = JSON.parse(await statusRes.text());
-
-    const infoItems = parseItems(infoRaw);
-    const statusItems = parseItems(statusRaw);
-
-    // buildStations without origin → distanceKm = null (계산은 아래에서 수행)
-    stations = buildStations(infoItems, statusItems);
+    // infoItems를 info와 status 양쪽에 전달해 stat 필드를 자기 자신에서 읽도록 한다.
+    stations = buildStations(infoItems, infoItems);
     cache.set(cacheKey, stations);
   }
 
