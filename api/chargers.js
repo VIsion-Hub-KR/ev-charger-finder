@@ -1,13 +1,14 @@
-// NOTE: cold miss triggers ~40s live fetch. Vercel function maxDuration must be
-// >= ~50s (Pro plan) for cold-miss areas; warm areas served from KV are instant.
+// 라이브 갱신(fresh=1)은 공공 API를 직접 부르는데 40~80초 걸린다(서버가 느림).
+// Vercel Fluid Compute는 무료(Hobby)에서도 최대 300초까지 허용하므로 넉넉히 잡는다.
+// (KV 캐시 읽기는 즉시라 이 시간과 무관)
 
 import { buildStations } from '../lib/chargers.js';
 import { haversineKm } from '../lib/geo.js';
 import { fetchChargerItemsForSigungu } from '../lib/govapi.js';
 import { createKvStore, createMemoryStore } from '../lib/store.js';
 
-// Vercel reads this to set the function timeout limit.
-export const config = { maxDuration: 60 };
+// Vercel reads this to set the function timeout limit (Fluid Compute: up to 300s).
+export const config = { maxDuration: 300 };
 
 // 저장소는 모듈 단위 싱글톤으로 둔다. (요청마다 새로 만들면 메모리 캐시가 요청 간에
 // 사라져 매번 콜드 페치가 된다. KV가 있으면 KV, 없으면 인메모리로 폴백.)
