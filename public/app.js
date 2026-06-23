@@ -1028,13 +1028,17 @@ function resolveUserPosition() {
  * @param {{ lat: number|string, lng: number|string, name?: string }} dest
  */
 function openNaverDirections({ lat, lng, name = '충전소' }) {
-  const dLat  = Number(lat).toFixed(7);
-  const dLng  = Number(lng).toFixed(7);
-  const dName = encodeURIComponent(name);
+  const goal = `${Number(lng).toFixed(7)},${Number(lat).toFixed(7)},${encodeURIComponent(name)}`;
 
-  // Naver Maps directions URL (mode=car: 테슬라 차량용 경로):
-  // https://map.naver.com/p/directions/-/-/{dLng},{dLat},{dName}/-/car
-  const url = `https://map.naver.com/p/directions/-/-/${dLng},${dLat},${dName}/-/car`;
+  // 출발지 = 내 위치(있으면). 없으면 빈 출발지(-).
+  let start = '-';
+  if (myPosition && Number.isFinite(myPosition.lat) && Number.isFinite(myPosition.lng)) {
+    start = `${Number(myPosition.lng).toFixed(7)},${Number(myPosition.lat).toFixed(7)},${encodeURIComponent('내 위치')}`;
+  }
+
+  // Naver Maps 길찾기 URL: /p/directions/{출발}/{목적}/{경유}/{이동수단}
+  // 출발지를 채우면 "여기→거기" 경로·거리가 즉시 표시됨 (car: 자동차).
+  const url = `https://map.naver.com/p/directions/${start}/${goal}/-/car`;
 
   window.open(url, '_blank', 'noopener,noreferrer');
 }
