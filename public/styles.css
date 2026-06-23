@@ -424,10 +424,13 @@ body {
   inset: 0;
   z-index: 400;
   display: flex;
-  align-items: flex-end;
+  align-items: center;          /* 가운데 팝업 (바텀시트 X) */
   justify-content: center;
-  background: rgba(0, 0, 0, 0.35);
-  animation: sheet-backdrop-in 0.2s ease forwards;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.42);              /* 음영 */
+  -webkit-backdrop-filter: blur(6px);          /* 블러 (iOS) */
+  backdrop-filter: blur(6px);                  /* 블러 — 주변 지도 흐림 */
+  animation: sheet-backdrop-in 0.15s ease forwards;
 }
 
 .detail-sheet[hidden] {
@@ -435,35 +438,29 @@ body {
 }
 
 @keyframes sheet-backdrop-in {
-  from { background: rgba(0, 0, 0, 0); }
-  to   { background: rgba(0, 0, 0, 0.35); }
+  from { opacity: 0; }
+  to   { opacity: 1; }
 }
 
 .sheet-card {
   position: relative;
   width: 100%;
-  max-width: 480px;
+  max-width: 440px;
   background: #fff;
-  border-radius: 24px 24px 0 0;
-  padding: 24px 20px max(24px, env(safe-area-inset-bottom, 24px));
-  box-shadow: 0 -4px 24px rgba(0, 0, 0, 0.15);
-  animation: sheet-slide-up 0.25s cubic-bezier(0.32, 0.72, 0, 1) forwards;
+  border-radius: 22px;                         /* 사방 둥근 팝업 카드 */
+  padding: 26px 22px 24px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.28);
+  animation: sheet-pop-in 0.14s cubic-bezier(0.2, 0.8, 0.3, 1) forwards;
 }
 
-@keyframes sheet-slide-up {
-  from { transform: translateY(100%); }
-  to   { transform: translateY(0); }
+@keyframes sheet-pop-in {
+  from { transform: scale(0.94); opacity: 0; }
+  to   { transform: scale(1); opacity: 1; }
 }
 
-/* Drag handle visual cue */
+/* 팝업(가운데 모달)이라 바텀시트 드래그 핸들은 숨김 */
 .sheet-card::before {
-  content: '';
-  display: block;
-  width: 36px;
-  height: 4px;
-  border-radius: 2px;
-  background: #ddd;
-  margin: 0 auto 16px;
+  display: none;
 }
 
 .sheet-close {

@@ -435,15 +435,52 @@ function openChargerSheet(station) {
 }
 
 /**
+ * 좌표 → 한국어 장소명(건물명 우선, 없으면 도로명 주소)으로 역지오코딩.
+ * supercharge.info의 영어 테슬라 이름을 한국어로 바꾸는 데 사용.
+ * @param {number} lat
+ * @param {number} lng
+ * @returns {Promise<string>} 한국어 라벨 (실패 시 빈 문자열)
+ */
+function koreanPlaceName(lat, lng) {
+  return new Promise((resolve) => {
+    if (!window.naver?.maps?.Service) { resolve(''); return; }
+    naver.maps.Service.reverseGeocode(
+      {
+        coords: new naver.maps.LatLng(Number(lat), Number(lng)),
+        orders: [naver.maps.Service.OrderType.ROAD_ADDR, naver.maps.Service.OrderType.ADDR].join(','),
+      },
+      (status, res) => {
+        if (status !== naver.maps.Service.Status.OK) { resolve(''); return; }
+        try {
+          const results = res.v2?.results || [];
+          const road = results.find((x) => x.name === 'roadaddr') || results[0];
+          const area2 = road?.region?.area2?.name || '';
+          const bld = road?.land?.addition0?.value || '';           // 건물명
+          const roadName = road?.land?.name || '';
+          const num = [road?.land?.number1, road?.land?.number2].filter(Boolean).join('-');
+          if (bld) { resolve(`${area2} ${bld}`.trim()); return; }
+          if (roadName) { resolve(`${area2} ${roadName} ${num}`.trim()); return; }
+          resolve(area2.trim());
+        } catch { resolve(''); }
+      },
+    );
+  });
+}
+
+/**
  * Open the detail sheet for a Tesla supercharger.
  * @param {object} station — { name, lat, lng, stalls }
  */
 function openTeslaSheet(station) {
   const el = ensureSheet();
-  const name   = station.name  || 'Tesla 슈퍼차저';
-  const stalls = station.stalls ?? '—';
+  // supercharge.info 이름은 영어("Seoul, South Korea - Centerfield"). 마지막 구간(건물)만 추려
+  // 즉시 표시하고, 곧바로 역지오코딩해 한국어 이름으로 교체한다.
+  const rawName = station.name || 'Tesla 슈퍼차저';
+  const engShort = (rawName.split(' - ').pop() || rawName).replace(/,?\s*South Korea\s*/i, '').trim() || rawName;
+  let displayName = engShort;
   const lat    = station.lat;
   const lng    = station.lng;
+  const stalls = station.stalls ?? '—';
 
   let distHtml = '';
   if (myPosition && lat && lng) {
@@ -463,7 +500,7 @@ function openTeslaSheet(station) {
       </button>
       <div class="sheet-header">
         <span class="badge badge-tesla">테슬라 슈퍼차저</span>
-        <h2 class="sheet-name">${name}</h2>
+        <h2 class="sheet-name" id="tesla-sheet-name">${engShort}</h2>
       </div>
       <div class="sheet-avail">
         <span class="avail-label">충전기 ${stalls}기</span>
@@ -487,13 +524,21 @@ function openTeslaSheet(station) {
     </div>`;
 
   el.querySelector('.btn-directions-tesla').addEventListener('click', () => {
-    openNaverDirections({ lat, lng, name });
+    openNaverDirections({ lat, lng, name: displayName });
   });
 
   // Collapse nearby sheet so it doesn't fight with the detail sheet (Feature 2)
   collapseNearbySheet();
 
   el.hidden = false;
+
+  // 영어 이름을 한국어 건물/주소명으로 교체 (역지오코딩, 비동기)
+  koreanPlaceName(lat, lng).then((kr) => {
+    if (!kr) return;
+    displayName = kr;
+    const nameEl = el.querySelector('#tesla-sheet-name');
+    if (nameEl && !el.hidden) nameEl.textContent = kr;
+  });
 }
 
 // ---------------------------------------------------------------------------
