@@ -4,7 +4,7 @@
 import { buildStations } from '../lib/chargers.js';
 import { haversineKm } from '../lib/geo.js';
 import { fetchChargerItemsForSigungu } from '../lib/govapi.js';
-import { createKvStore } from '../lib/store.js';
+import { createKvStore, createMemoryStore } from '../lib/store.js';
 
 // Vercel reads this to set the function timeout limit.
 export const config = { maxDuration: 60 };
@@ -97,7 +97,8 @@ export default async function handler(req, res) {
     }
 
     const zscodes = String(zscode).split(',').map((s) => s.trim()).filter(Boolean);
-    const store = createKvStore();
+    // KV가 설정돼 있으면 KV, 아니면(로컬 개발 등) 인메모리로 폴백
+    const store = process.env.KV_REST_API_URL ? createKvStore() : createMemoryStore();
     const key = process.env.DATA_GO_KR_KEY;
 
     const stations = await fetchStations({
