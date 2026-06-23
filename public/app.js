@@ -142,6 +142,29 @@ let loadingStartTime = null;
 let loadingTimerInterval = null;
 
 // ---------------------------------------------------------------------------
+// Freshness indicator + live refresh state
+// ---------------------------------------------------------------------------
+
+/**
+ * Whether a background live-refresh (fresh=1) is currently in-flight.
+ * Prevents concurrent live refreshes; does NOT block cached reads.
+ */
+let liveRefreshInFlight = false;
+
+/**
+ * Token incremented each time loadChargers is called.
+ * The live-refresh closure captures this token; if it changes before the live
+ * response arrives, the result is discarded (stale-while-revalidate race guard).
+ */
+let loadGeneration = 0;
+
+/** @type {HTMLElement|null} — freshness chip shown below search bar */
+let freshnessEl = null;
+
+/** @type {HTMLElement|null} — the refresh FAB button */
+let btnRefresh = null;
+
+// ---------------------------------------------------------------------------
 // DOM refs (populated after DOMContentLoaded / inline script)
 // ---------------------------------------------------------------------------
 
@@ -272,6 +295,67 @@ function getZscode(latLng) {
       }
     );
   });
+}
+
+// ---------------------------------------------------------------------------
+// Freshness indicator
+// ---------------------------------------------------------------------------
+
+/**
+ * Find the newest statUpdDt among a list of stations.
+ * @param {object[]} stations
+ * @returns {string|null}
+ */
+function newestStatUpdDt(stations) {
+  let best = null;
+  for (const s of stations) {
+    const v = s.lastUpdate || s.statUpdDt || null;
+    if (v && (!best || v > best)) best = v;
+  }
+  return best;
+}
+
+/**
+ * Ensure the freshness indicator element exists and return it.
+ * Positioned below the filter chips, above the route button.
+ * @returns {HTMLElement}
+ */
+function ensureFreshnessEl() {
+  if (freshnessEl) return freshnessEl;
+  freshnessEl = document.createElement('div');
+  freshnessEl.id = 'freshness-indicator';
+  freshnessEl.className = 'freshness-indicator';
+  freshnessEl.setAttribute('aria-live', 'polite');
+  freshnessEl.hidden = true;
+  document.body.appendChild(freshnessEl);
+  return freshnessEl;
+}
+
+/**
+ * Show the freshness chip with given text.
+ * @param {string} text
+ */
+function showFreshness(text) {
+  const el = ensureFreshnessEl();
+  el.textContent = text;
+  el.hidden = false;
+}
+
+/** Hide the freshness chip. */
+function hideFreshness() {
+  if (freshnessEl) freshnessEl.hidden = true;
+}
+
+/**
+ * Build the freshness string from a list of stations.
+ * @param {object[]} stations
+ * @param {boolean} [refreshing] — if true, append " · 갱신 중…"
+ * @returns {string}
+ */
+function buildFreshnessText(stations, refreshing = false) {
+  const raw = newestStatUpdDt(stations);
+  const timeStr = raw ? `${fmtUpdate(raw)} 기준` : '시간 미상';
+  return refreshing ? `충전소 정보 · ${timeStr} · 갱신 중…` : `충전소 정보 · ${timeStr}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -895,19 +979,65 @@ async function loadTeslaChargers() {
 // ---------------------------------------------------------------------------
 
 /**
+ * Internal helper: fetch charger data from /api/chargers.
+ * @param {{ lat: number, lng: number }} centre
+ * @param {string} zscode
+ * @param {boolean} fresh — pass fresh=1 to the API
+ * @returns {Promise<object[]>}
+ */
+async function _fetchChargerData(centre, zscode, fresh) {
+  const params = new URLSearchParams({
+    lat:    String(centre.lat),
+    lng:    String(centre.lng),
+    radius: String(CHARGER_RADIUS),
+  });
+  if (zscode) params.set('zscode', zscode);
+  if (fresh)  params.set('fresh', '1');
+
+  const url = `/api/chargers?${params.toString()}`;
+  const res = await fetch(url, { signal: AbortSignal.timeout(65_000) });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data = await res.json();
+  return Array.isArray(data) ? data : (data.stations ?? data.items ?? []);
+}
+
+/**
+ * Set the refresh button spinning state.
+ * @param {boolean} spinning
+ */
+function setRefreshSpinning(spinning) {
+  if (!btnRefresh) return;
+  if (spinning) {
+    btnRefresh.classList.add('btn-refresh--spinning');
+    btnRefresh.setAttribute('aria-label', '충전소 정보 갱신 중…');
+    btnRefresh.disabled = true;
+  } else {
+    btnRefresh.classList.remove('btn-refresh--spinning');
+    btnRefresh.setAttribute('aria-label', '충전소 정보 새로고침');
+    btnRefresh.disabled = false;
+  }
+}
+
+/**
  * Fetch chargers for the given centre and render markers.
- * Shows a loading overlay while the (potentially slow) API call runs.
+ * Implements stale-while-revalidate:
+ *   1. Fast cached request → render immediately if data exists.
+ *   2. Background live request (fresh=1) → re-render when done.
+ * Shows a blocking overlay ONLY when the cache is empty (first load for area).
  *
  * Guards:
- *   - chargerLoadInFlight: prevents duplicate concurrent requests
+ *   - chargerLoadInFlight: prevents duplicate concurrent cached-read requests
  *   - lastLoadedCentre + MIN_MOVE_METRES: skips if centre barely moved
+ *   - loadGeneration: race guard for the async live refresh
  *
  * @param {{ lat: number, lng: number }} centre
- * @param {{ force?: boolean }} [opts]  — force=true skips the min-distance guard
+ * @param {{ force?: boolean, liveOnly?: boolean }} [opts]
+ *   force=true   — skip the min-distance guard
+ *   liveOnly=true — skip cached phase, go straight to live (refresh button)
  */
-async function loadChargers(centre, { force = false } = {}) {
+async function loadChargers(centre, { force = false, liveOnly = false } = {}) {
   // Min-distance guard (skip if centre hasn't moved enough)
-  if (!force && lastLoadedCentre) {
+  if (!force && !liveOnly && lastLoadedCentre) {
     const moved = haversine(lastLoadedCentre, centre);
     if (moved < MIN_MOVE_METRES) {
       console.debug(`[chargers] 중심 이동 ${Math.round(moved)}m < ${MIN_MOVE_METRES}m — 재조회 건너뜀`);
@@ -915,48 +1045,122 @@ async function loadChargers(centre, { force = false } = {}) {
     }
   }
 
-  // In-flight guard
-  if (chargerLoadInFlight) {
+  // In-flight guard for the cached-read phase
+  if (!liveOnly && chargerLoadInFlight) {
     console.debug('[chargers] 이미 요청 중 — 중복 요청 건너뜀');
     return;
   }
 
-  chargerLoadInFlight = true;
-  showLoading();
+  // Advance generation token — any in-flight live refresh for a previous area is invalidated
+  const myGeneration = ++loadGeneration;
 
+  // Resolve zscode once (shared for both cached and live requests)
   let zscode = '';
   try {
     const latLng = new naver.maps.LatLng(centre.lat, centre.lng);
     zscode = await getZscode(latLng);
   } catch (err) {
-    // zscode is optional — the API can still return results by lat/lng
     console.warn('[zscode] 역지오코딩 실패, zscode 없이 요청합니다:', err.message);
   }
 
-  const params = new URLSearchParams({
-    lat:    String(centre.lat),
-    lng:    String(centre.lng),
-    radius: String(CHARGER_RADIUS),
-  });
-  if (zscode) params.set('zscode', zscode);
+  // ── Phase 1: cached (fast) read ────────────────────────────────────────────
+  let cachedStations = null;
 
-  const url = `/api/chargers?${params.toString()}`;
+  if (!liveOnly) {
+    chargerLoadInFlight = true;
+    showLoading();
 
+    try {
+      cachedStations = await _fetchChargerData(centre, zscode, false);
+    } catch (err) {
+      console.warn('[chargers] 캐시 읽기 실패:', err.message);
+    } finally {
+      chargerLoadInFlight = false;
+      hideLoading();
+    }
+
+    if (cachedStations && cachedStations.length > 0) {
+      // Render immediately with cached data
+      renderChargerMarkers(cachedStations);
+      lastLoadedCentre = centre;
+
+      // Show freshness: "N분 전 기준 · 갱신 중…"
+      showFreshness(buildFreshnessText(cachedStations, true));
+    }
+  }
+
+  // ── Phase 2: live refresh (background, non-blocking) ──────────────────────
+  // If liveOnly (refresh button), show spinning state immediately.
+  if (liveOnly) {
+    setRefreshSpinning(true);
+    if (freshnessEl && !freshnessEl.hidden) {
+      // Append "갱신 중…" to existing freshness text
+      const cur = freshnessEl.textContent || '';
+      if (!cur.includes('갱신 중')) {
+        freshnessEl.textContent = cur.replace(' · 갱신 중…', '') + ' · 갱신 중…';
+      }
+    }
+  }
+
+  // Guard: only one live refresh at a time
+  if (liveRefreshInFlight && !liveOnly) {
+    // A live refresh for a previous load is already running; it will be
+    // invalidated by the generation check when it returns. Don't start another.
+    console.debug('[chargers] live refresh already in-flight — skipping');
+    return;
+  }
+
+  // Skip live refresh if cache was empty AND liveOnly is false —
+  // in that case the cached phase already showed the blocking overlay and
+  // we need to start a fresh load (fallback: no data yet, must block).
+  if (!liveOnly && (!cachedStations || cachedStations.length === 0)) {
+    // No cached data: show blocking overlay and do a live fetch as the primary load.
+    chargerLoadInFlight = true;
+    showLoading();
+    try {
+      const stations = await _fetchChargerData(centre, zscode, true);
+      if (loadGeneration !== myGeneration) return; // stale — another load started
+      renderChargerMarkers(stations);
+      lastLoadedCentre = centre;
+      const raw = newestStatUpdDt(stations);
+      showFreshness(`충전소 정보 · ${raw ? '방금 전 기준' : '방금 기준'}`);
+    } catch (err) {
+      console.error('[chargers] live fetch 실패:', err.message);
+      showRetryToast();
+      hideFreshness();
+    } finally {
+      chargerLoadInFlight = false;
+      hideLoading();
+    }
+    return;
+  }
+
+  // Background live refresh
+  liveRefreshInFlight = true;
   try {
-    const res = await fetch(url, { signal: AbortSignal.timeout(60_000) });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
+    const liveStations = await _fetchChargerData(centre, zscode, true);
 
-    // API may return { stations: [...] } or a bare array
-    const stations = Array.isArray(data) ? data : (data.stations ?? data.items ?? []);
-    renderChargerMarkers(stations);
-    lastLoadedCentre = centre; // update after successful load
+    // Race guard: if the user moved before this returned, discard result
+    if (loadGeneration !== myGeneration) {
+      console.debug('[chargers] live refresh result is stale — discarding');
+      return;
+    }
+
+    renderChargerMarkers(liveStations);
+    lastLoadedCentre = centre;
+
+    // Update freshness: "방금 전 기준"
+    showFreshness(`충전소 정보 · 방금 전 기준`);
   } catch (err) {
-    console.error('[chargers] 불러오기 실패:', err.message);
-    showRetryToast();
+    console.warn('[chargers] live refresh 실패:', err.message);
+    // Don't show error toast — cached data is already shown
+    // Just revert freshness text to remove "갱신 중…"
+    if (cachedStations && cachedStations.length > 0) {
+      showFreshness(buildFreshnessText(cachedStations, false));
+    }
   } finally {
-    chargerLoadInFlight = false;
-    hideLoading();
+    liveRefreshInFlight = false;
+    setRefreshSpinning(false);
   }
 }
 
@@ -1882,6 +2086,50 @@ function wireGpsButton() {
 }
 
 // ---------------------------------------------------------------------------
+// Refresh button (live data, stale-while-revalidate)
+// ---------------------------------------------------------------------------
+
+/**
+ * Create the floating refresh button above the GPS button.
+ * On click: fires a live (fresh=1) reload for the current map centre.
+ * Shows spin animation while in-flight, then updates freshness text.
+ */
+function createRefreshButton() {
+  btnRefresh = document.createElement('button');
+  btnRefresh.id = 'btn-refresh';
+  btnRefresh.className = 'btn-refresh';
+  btnRefresh.type = 'button';
+  btnRefresh.setAttribute('aria-label', '충전소 정보 새로고침');
+  btnRefresh.title = '충전소 정보 새로고침';
+
+  // Circular-arrows SVG (no emoji)
+  btnRefresh.innerHTML = `
+    <svg id="refresh-icon" xmlns="http://www.w3.org/2000/svg" width="22" height="22"
+         viewBox="0 0 24 24" fill="none" stroke="currentColor"
+         stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+         aria-hidden="true">
+      <polyline points="23 4 23 10 17 10"/>
+      <polyline points="1 20 1 14 7 14"/>
+      <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+    </svg>`;
+
+  btnRefresh.addEventListener('click', () => {
+    if (liveRefreshInFlight) return; // already refreshing
+
+    const centre = map
+      ? (() => { const c = map.getCenter(); return { lat: c.lat(), lng: c.lng() }; })()
+      : lastLoadedCentre;
+
+    if (!centre) return;
+
+    // Fire a live-only reload (skip cached phase)
+    loadChargers(centre, { force: true, liveOnly: true });
+  });
+
+  document.body.appendChild(btnRefresh);
+}
+
+// ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
 
@@ -1909,6 +2157,9 @@ async function main() {
 
   // 6. Wire GPS button for subsequent taps
   wireGpsButton();
+
+  // 6b. Create refresh button (live data reload)
+  createRefreshButton();
 
   // 7. Wire filter chips (Task 11)
   wireFilterChips();

@@ -23,14 +23,21 @@ const store = process.env.KV_REST_API_URL ? createKvStore() : createMemoryStore(
  *   lng: number,
  *   radiusKm?: number,
  *   zscodes: string[],
- *   store: object,        — getSnapshot / setSnapshot
- *   key: string,          — DATA_GO_KR_KEY (never logged)
+ *   store: object,          — getSnapshot / setSnapshot
+ *   key: string,            — DATA_GO_KR_KEY (never logged)
  *   fetchImpl?: Function,
- *   maxAgeMs?: number,    — snapshot TTL in ms (default 10 min)
- *   now?: () => number,   — injectable clock (default Date.now)
+ *   maxAgeMs?: number,      — snapshot TTL in ms (default 10 min)
+ *   now?: () => number,     — injectable clock (default Date.now)
+ *   readOnly?: boolean,     — KV read-only mode (no live fetch)
+ *   forceLive?: boolean,    — bypass cache and fetch live; anti-hammer: skip if
+ *                             snapshot is younger than FORCE_LIVE_FLOOR_MS
  * }} opts
  * @returns {Promise<Station[]>}
  */
+
+/** Anti-hammer floor for forceLive: reuse snapshot if younger than this (ms). */
+const FORCE_LIVE_FLOOR_MS = 60_000;
+
 export async function fetchStations({
   lat,
   lng,
@@ -42,10 +49,24 @@ export async function fetchStations({
   maxAgeMs = 600_000,
   now = Date.now,
   readOnly = false,
+  forceLive = false,
 }) {
   const perZscodeStations = await Promise.all(
     zscodes.map(async (zscode) => {
       const snap = await store.getSnapshot(zscode);
+
+      // forceLive: live fetch + write-through, but only if snapshot is older
+      // than FORCE_LIVE_FLOOR_MS (anti-hammer: mashing refresh won't spam the API).
+      if (forceLive) {
+        if (snap && now() - snap.updatedAt < FORCE_LIVE_FLOOR_MS) {
+          // Snapshot is fresh enough — reuse it to avoid spamming the slow API.
+          return snap.stations;
+        }
+        const items = await fetchChargerItemsForSigungu({ zscode, key, fetchImpl });
+        const stations = buildStations(items, items);
+        await store.setSnapshot(zscode, { stations, updatedAt: now() });
+        return stations;
+      }
 
       // 읽기 전용(프로덕션/KV): 사전 빌드된 KV만 사용. 미스여도 느린 공공 API를
       // 동기 호출하지 않는다(서버리스 타임아웃 방지). 신선도는 외부 워머가 유지.
@@ -110,6 +131,8 @@ export default async function handler(req, res) {
     const zscodes = String(zscode).split(',').map((s) => s.trim()).filter(Boolean);
     const key = process.env.DATA_GO_KR_KEY;
 
+    const fresh = req.query.fresh === '1';
+
     const stations = await fetchStations({
       lat: Number(lat),
       lng: Number(lng),
@@ -117,11 +140,16 @@ export default async function handler(req, res) {
       zscodes,
       store,
       key,
-      // KV(프로덕션)면 읽기 전용 — 사전 빌드된 데이터만, 콜드 40초 호출 금지(타임아웃 방지)
-      readOnly: !!process.env.KV_REST_API_URL,
+      // fresh=1: live fetch + write-through (anti-hammer floor applies inside fetchStations)
+      // otherwise: KV(프로덕션)면 읽기 전용 — 사전 빌드된 데이터만, 콜드 40초 호출 금지
+      ...(fresh
+        ? { forceLive: true }
+        : { readOnly: !!process.env.KV_REST_API_URL }),
     });
 
-    res.setHeader('Cache-Control', 's-maxage=120');
+    // Live responses must not be edge-cached (they are the fresh data).
+    // Cached reads can be served from CDN for 120 s.
+    res.setHeader('Cache-Control', fresh ? 'no-store' : 's-maxage=120');
     res.status(200).json({ stations });
   } catch (e) {
     // Never leak the API key in error details
