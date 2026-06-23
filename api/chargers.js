@@ -41,17 +41,24 @@ export async function fetchStations({
   fetchImpl = globalThis.fetch,
   maxAgeMs = 600_000,
   now = Date.now,
+  readOnly = false,
 }) {
   const perZscodeStations = await Promise.all(
     zscodes.map(async (zscode) => {
       const snap = await store.getSnapshot(zscode);
+
+      // 읽기 전용(프로덕션/KV): 사전 빌드된 KV만 사용. 미스여도 느린 공공 API를
+      // 동기 호출하지 않는다(서버리스 타임아웃 방지). 신선도는 외부 워머가 유지.
+      if (readOnly) {
+        return snap ? snap.stations : [];
+      }
 
       if (snap && now() - snap.updatedAt <= maxAgeMs) {
         // HIT — serve from store, no external call
         return snap.stations;
       }
 
-      // MISS or STALE — fetch live and write through
+      // MISS or STALE — fetch live and write through (로컬/개발 편의)
       const items = await fetchChargerItemsForSigungu({ zscode, key, fetchImpl });
       const stations = buildStations(items, items);
       await store.setSnapshot(zscode, { stations, updatedAt: now() });
@@ -110,6 +117,8 @@ export default async function handler(req, res) {
       zscodes,
       store,
       key,
+      // KV(프로덕션)면 읽기 전용 — 사전 빌드된 데이터만, 콜드 40초 호출 금지(타임아웃 방지)
+      readOnly: !!process.env.KV_REST_API_URL,
     });
 
     res.setHeader('Cache-Control', 's-maxage=120');
