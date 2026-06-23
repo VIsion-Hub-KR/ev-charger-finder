@@ -972,53 +972,42 @@ function showSearchNoResult() {
 }
 
 /**
- * Geocode a query string via naver.maps.Service.geocode and move the map.
+ * Search for a place by keyword via the server-side /api/search proxy
+ * (Naver 지역검색 Open API) and move the map to the first result.
  *
- * Uses: naver.maps.Service.geocode({ query }, callback)
- * On success: take first result's coords → map.setCenter → loadChargers.
+ * Replaces the previous naver.maps.Service.geocode path.
+ * Supports place names ("강남역") as well as addresses.
+ *
+ * On success:  take results[0] → map.setCenter → loadChargers (force reload).
  * On no result or error: show "검색 결과 없음".
- *
- * TODO (live verification): naver.maps.Service.geocode requires the NCP key to have
- *   the "Geocoding" API enabled. Test once a valid key is injected.
  *
  * @param {string} query
  */
 async function geocodeAndMove(query) {
   if (!query.trim()) return;
 
-  if (!window.naver?.maps?.Service) {
-    console.warn('[search] naver.maps.Service not available — key may be missing');
+  let results;
+  try {
+    const res = await fetch(`/api/search?query=${encodeURIComponent(query.trim())}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const body = await res.json();
+    results = body.results ?? [];
+  } catch (err) {
+    console.warn('[search] /api/search 실패:', err.message);
     showSearchNoResult();
     return;
   }
 
-  naver.maps.Service.geocode({ query: query.trim() }, async (status, response) => {
-    if (status !== naver.maps.Service.Status.OK) {
-      console.warn('[search] geocode 실패 status:', status);
-      showSearchNoResult();
-      return;
-    }
+  if (!results.length) {
+    showSearchNoResult();
+    return;
+  }
 
-    const items = response?.v2?.addresses;
-    if (!items || items.length === 0) {
-      showSearchNoResult();
-      return;
-    }
-
-    // Take first result
-    const first = items[0];
-    const lat = parseFloat(first.y);
-    const lng = parseFloat(first.x);
-
-    if (isNaN(lat) || isNaN(lng)) {
-      showSearchNoResult();
-      return;
-    }
-
-    const centre = { lat, lng };
-    map.setCenter(new naver.maps.LatLng(lat, lng));
-    await loadChargers(centre, { force: true }); // force reload for explicit search
-  });
+  const r = results[0];
+  const centre = { lat: r.lat, lng: r.lng };
+  map.setCenter(new naver.maps.LatLng(r.lat, r.lng));
+  map.setZoom(DEFAULT_ZOOM);
+  await loadChargers(centre, { force: true }); // force reload for explicit search
 }
 
 /**
