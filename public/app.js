@@ -1316,6 +1316,9 @@ function wireSearch() {
 
   // Submit on Enter
   searchInput.addEventListener('keydown', (e) => {
+    // 한글 IME 조합 중(isComposing/keyCode 229)에는 Enter를 무시한다.
+    // 조합 중 Enter를 처리하면 마지막 글자가 중복된다("부산역역" 버그).
+    if (e.isComposing || e.keyCode === 229) return;
     if (e.key === 'Enter') {
       e.preventDefault();
       searchInput.blur(); // dismiss mobile keyboard
