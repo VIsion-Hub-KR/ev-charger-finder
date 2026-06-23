@@ -848,9 +848,9 @@ function openNaverDirections({ lat, lng, name = '충전소' }) {
   const dLng  = Number(lng).toFixed(7);
   const dName = encodeURIComponent(name);
 
-  // Naver Maps directions URL:
-  // https://map.naver.com/p/directions/-/-/{dLng},{dLat},{dName}/-/walk
-  const url = `https://map.naver.com/p/directions/-/-/${dLng},${dLat},${dName}/-/walk`;
+  // Naver Maps directions URL (mode=car: 테슬라 차량용 경로):
+  // https://map.naver.com/p/directions/-/-/{dLng},{dLat},{dName}/-/car
+  const url = `https://map.naver.com/p/directions/-/-/${dLng},${dLat},${dName}/-/car`;
 
   window.open(url, '_blank', 'noopener,noreferrer');
 }
