@@ -713,7 +713,7 @@ async function loadChargers(centre, { force = false } = {}) {
   const url = `/api/chargers?${params.toString()}`;
 
   try {
-    const res = await fetch(url, { signal: AbortSignal.timeout(45_000) });
+    const res = await fetch(url, { signal: AbortSignal.timeout(60_000) });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
 

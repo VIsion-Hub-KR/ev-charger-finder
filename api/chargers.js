@@ -9,6 +9,10 @@ import { createKvStore, createMemoryStore } from '../lib/store.js';
 // Vercel reads this to set the function timeout limit.
 export const config = { maxDuration: 60 };
 
+// 저장소는 모듈 단위 싱글톤으로 둔다. (요청마다 새로 만들면 메모리 캐시가 요청 간에
+// 사라져 매번 콜드 페치가 된다. KV가 있으면 KV, 없으면 인메모리로 폴백.)
+const store = process.env.KV_REST_API_URL ? createKvStore() : createMemoryStore();
+
 /**
  * Cache-aside fetch: for each zscode check the store first (HIT = instant),
  * only fall back to the slow public API on a miss or stale entry, then write
@@ -97,8 +101,6 @@ export default async function handler(req, res) {
     }
 
     const zscodes = String(zscode).split(',').map((s) => s.trim()).filter(Boolean);
-    // KV가 설정돼 있으면 KV, 아니면(로컬 개발 등) 인메모리로 폴백
-    const store = process.env.KV_REST_API_URL ? createKvStore() : createMemoryStore();
     const key = process.env.DATA_GO_KR_KEY;
 
     const stations = await fetchStations({
