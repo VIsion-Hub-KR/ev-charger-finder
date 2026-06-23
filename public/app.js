@@ -100,6 +100,28 @@ let idleDebounceTimer = null;
 let destMarker = null;
 
 // ---------------------------------------------------------------------------
+// Route corridor state
+// ---------------------------------------------------------------------------
+
+/**
+ * Last searched destination — set inside geocodeAndMove after a successful search.
+ * @type {{ lat: number, lng: number, name: string }|null}
+ */
+let lastDestination = null;
+
+/** Whether route corridor mode is currently active. */
+let routeModeActive = false;
+
+/** @type {naver.maps.Polyline|null} — The route polyline drawn on the map. */
+let routePolyline = null;
+
+/** @type {HTMLElement|null} — "가는 길 충전소" pill button */
+let btnRouteMode = null;
+
+/** @type {HTMLElement|null} — Summary banner shown while route mode is on */
+let routeBannerEl = null;
+
+// ---------------------------------------------------------------------------
 // Loading elapsed-time state (Task 12 — Feature 3)
 // ---------------------------------------------------------------------------
 
@@ -1222,6 +1244,17 @@ async function geocodeAndMove(query) {
   // Feature 1: drop/move destination pin at the search result coordinate
   setDestPin(centre, r.name || query.trim());
 
+  // Store destination for route corridor mode
+  lastDestination = { lat: r.lat, lng: r.lng, name: r.name || query.trim() };
+
+  // Exit route mode if a new destination was searched while route mode was on
+  if (routeModeActive) {
+    routeModeActive = false;
+    clearRoutePolyline();
+    hideRouteBanner();
+  }
+  updateRouteModeButton();
+
   map.setCenter(new naver.maps.LatLng(r.lat, r.lng));
   map.setZoom(DEFAULT_ZOOM);
   await loadChargers(centre, { force: true }); // force reload for explicit search
@@ -1242,12 +1275,17 @@ function wireSearch() {
     searchClear.hidden = searchInput.value.length === 0;
   });
 
-  // Clear button — also removes destination pin (Feature 1)
+  // Clear button — also removes destination pin (Feature 1) and exits route mode
   searchClear.addEventListener('click', () => {
     searchInput.value = '';
     searchClear.hidden = true;
     searchInput.focus();
     clearDestPin();
+    lastDestination = null;
+    if (routeModeActive) {
+      exitRouteMode();
+    }
+    updateRouteModeButton();
   });
 
   // Submit on Enter
@@ -1465,6 +1503,329 @@ function renderNearbyList() {
 }
 
 // ---------------------------------------------------------------------------
+// Route corridor mode
+// ---------------------------------------------------------------------------
+
+/**
+ * Remove the route polyline from the map.
+ */
+function clearRoutePolyline() {
+  if (routePolyline) {
+    routePolyline.setMap(null);
+    routePolyline = null;
+  }
+}
+
+/**
+ * Show or hide the "가는 길 충전소" button.
+ * Visible only when there is a destination and we're not yet in route mode.
+ * When routeModeActive the button changes to "경로 모드 종료" style.
+ */
+function updateRouteModeButton() {
+  if (!btnRouteMode) return;
+  if (!lastDestination) {
+    btnRouteMode.hidden = true;
+    return;
+  }
+  btnRouteMode.hidden = false;
+  if (routeModeActive) {
+    btnRouteMode.classList.add('btn-route--active');
+    btnRouteMode.setAttribute('aria-label', '경로 모드 종료');
+    btnRouteMode.setAttribute('aria-pressed', 'true');
+  } else {
+    btnRouteMode.classList.remove('btn-route--active');
+    btnRouteMode.setAttribute('aria-label', '가는 길 충전소 보기');
+    btnRouteMode.setAttribute('aria-pressed', 'false');
+  }
+}
+
+/**
+ * Show the route summary banner.
+ * @param {number} distanceKm
+ * @param {number} count — number of corridor stations found
+ */
+function showRouteBanner(distanceKm, count) {
+  if (!routeBannerEl) {
+    routeBannerEl = document.createElement('div');
+    routeBannerEl.id = 'route-banner';
+    routeBannerEl.className = 'route-banner';
+    routeBannerEl.setAttribute('role', 'status');
+    routeBannerEl.setAttribute('aria-live', 'polite');
+    document.body.appendChild(routeBannerEl);
+  }
+
+  routeBannerEl.innerHTML = `
+    <span class="route-banner-text">경로 <strong>${distanceKm}km</strong> · 경로 주변 충전소 <strong>${count}곳</strong></span>
+    <button class="route-banner-close" type="button" aria-label="경로 모드 종료">
+      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"
+           fill="none" stroke="currentColor" stroke-width="2.5"
+           stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <line x1="18" y1="6" x2="6" y2="18"/>
+        <line x1="6" y1="6" x2="18" y2="18"/>
+      </svg>
+    </button>`;
+
+  routeBannerEl.querySelector('.route-banner-close').addEventListener('click', () => {
+    exitRouteMode();
+  });
+
+  routeBannerEl.hidden = false;
+}
+
+/**
+ * Hide the route summary banner.
+ */
+function hideRouteBanner() {
+  if (routeBannerEl) routeBannerEl.hidden = true;
+}
+
+/**
+ * Exit route corridor mode: remove polyline, clear route results,
+ * restore normal nearby chargers for current map centre.
+ */
+async function exitRouteMode() {
+  routeModeActive = false;
+  clearRoutePolyline();
+  hideRouteBanner();
+  updateRouteModeButton();
+
+  // Reload normal chargers for current map centre
+  const centre = map.getCenter();
+  await loadChargers({ lat: centre.lat(), lng: centre.lng() }, { force: true });
+  renderNearbyList();
+}
+
+/**
+ * Sample the route path at roughly every ~12 km of cumulative distance.
+ * Always includes first and last point.
+ * Caps at 30 samples (logs if capped).
+ *
+ * @param {{ lat: number, lng: number }[]} path
+ * @returns {{ lat: number, lng: number }[]}
+ */
+function sampleRoutePath(path) {
+  if (path.length === 0) return [];
+  if (path.length === 1) return [path[0]];
+
+  const STEP_M  = 12_000; // ~12 km between samples
+  const MAX_SAMPLES = 30;
+
+  const samples = [path[0]];
+  let cumDist = 0;
+  let nextThreshold = STEP_M;
+
+  for (let i = 1; i < path.length; i++) {
+    cumDist += haversine(path[i - 1], path[i]);
+    if (cumDist >= nextThreshold) {
+      samples.push(path[i]);
+      nextThreshold += STEP_M;
+      if (samples.length >= MAX_SAMPLES - 1) {
+        // Cap reached — always add last point below, then stop
+        console.log(`[route] 샘플 30개 한도 도달 (경로 총 ${path.length}포인트)`);
+        break;
+      }
+    }
+  }
+
+  // Always include the last point if not already included
+  const last = path[path.length - 1];
+  if (samples[samples.length - 1] !== last) {
+    samples.push(last);
+  }
+
+  return samples;
+}
+
+/**
+ * Minimum distance in metres from a point to any segment of the route polyline.
+ * Uses nearest-point-on-segment approximation.
+ *
+ * @param {{ lat: number, lng: number }} point
+ * @param {{ lat: number, lng: number }[]} path
+ * @returns {number} metres
+ */
+function distToPolyline(point, path) {
+  let minDist = Infinity;
+  for (let i = 0; i < path.length; i++) {
+    const d = haversine(point, path[i]);
+    if (d < minDist) minDist = d;
+  }
+  return minDist;
+}
+
+/**
+ * Enter route corridor mode.
+ * Fetches the OSRM driving route, draws it, then loads chargers
+ * for all 시군구 along the route and filters to the 3 km corridor.
+ */
+async function enterRouteMode() {
+  if (!myPosition) {
+    showRetryToast('내 위치를 먼저 확인해 주세요');
+    return;
+  }
+  if (!lastDestination) return;
+
+  showLoading();
+
+  // 1. Fetch route from OSRM
+  let routeData;
+  try {
+    const url = `/api/route?slat=${myPosition.lat}&slng=${myPosition.lng}&glat=${lastDestination.lat}&glng=${lastDestination.lng}`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(25_000) });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    routeData = await res.json();
+  } catch (err) {
+    console.error('[route] 경로 요청 실패:', err.message);
+    showRetryToast('경로를 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.');
+    hideLoading();
+    return;
+  }
+
+  const { path, distanceKm, durationMin } = routeData;
+  if (!path || path.length === 0) {
+    showRetryToast('경로 데이터가 없습니다.');
+    hideLoading();
+    return;
+  }
+
+  // 2. Draw route polyline
+  clearRoutePolyline();
+  const pathLatLngs = path.map((p) => new naver.maps.LatLng(p.lat, p.lng));
+  routePolyline = new naver.maps.Polyline({
+    map,
+    path: pathLatLngs,
+    strokeColor: '#1c6ef2',
+    strokeWeight: 5,
+    strokeOpacity: 0.8,
+    strokeStyle: 'solid',
+    clickable: false,
+    zIndex: 30,
+  });
+
+  // 3. Fit map bounds to the route
+  const bounds = new naver.maps.LatLngBounds();
+  pathLatLngs.forEach((ll) => bounds.extend(ll));
+  map.fitBounds(bounds, { top: 80, right: 20, bottom: 120, left: 20 });
+
+  // 4. Sample route → unique zscodes
+  const samples = sampleRoutePath(path);
+  const zscodeMap = new Map(); // zscode → sample {lat,lng}
+
+  await Promise.allSettled(
+    samples.map(async (sample) => {
+      try {
+        const zs = await getZscode(new naver.maps.LatLng(sample.lat, sample.lng));
+        if (zs && !zscodeMap.has(zs)) {
+          zscodeMap.set(zs, sample);
+        }
+      } catch (_) {
+        // Ignore individual reverse-geocode failures
+      }
+    })
+  );
+
+  // 5. For each unique zscode, fetch chargers
+  const stationMap = new Map(); // statId → station
+
+  await Promise.allSettled(
+    Array.from(zscodeMap.entries()).map(async ([zscode, sample]) => {
+      try {
+        const url = `/api/chargers?lat=${sample.lat}&lng=${sample.lng}&radius=999&zscode=${zscode}`;
+        const res = await fetch(url, { signal: AbortSignal.timeout(30_000) });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        const stations = Array.isArray(data) ? data : (data.stations ?? data.items ?? []);
+        for (const st of stations) {
+          const id = st.statId || st.stationId || `${st.lat ?? st.latitude}_${st.lng ?? st.longitude}`;
+          if (!stationMap.has(id)) stationMap.set(id, st);
+        }
+      } catch (err) {
+        console.warn(`[route] zscode=${zscode} 충전소 요청 실패:`, err.message);
+      }
+    })
+  );
+
+  // 6. Filter to stations within 3 km of the route polyline
+  const CORRIDOR_M = 3000;
+  const corridorStations = Array.from(stationMap.values()).filter((st) => {
+    const lat = Number(st.lat ?? st.latitude);
+    const lng = Number(st.lng ?? st.longitude);
+    if (!lat || !lng) return false;
+    const dist = distToPolyline({ lat, lng }, path);
+    return dist <= CORRIDOR_M;
+  });
+
+  // 7. Apply existing speed/avail filters on top
+  const filteredStations = corridorStations.filter(chargerPassesFilter);
+
+  // 8. Render corridor stations
+  renderChargerMarkers(filteredStations);
+
+  // Hide Tesla markers in route mode (route is for 환경부 chargers only)
+  if (!filter.tesla) {
+    teslaMarkers.forEach((m) => m.setMap(null));
+  }
+
+  // 9. Update nearby list: sort by distance from origin (myPosition)
+  renderNearbyList();
+
+  // 10. Show summary banner
+  showRouteBanner(distanceKm, filteredStations.length);
+
+  routeModeActive = true;
+  updateRouteModeButton();
+
+  hideLoading();
+}
+
+/**
+ * Toggle route corridor mode on/off.
+ */
+async function toggleRouteMode() {
+  if (routeModeActive) {
+    await exitRouteMode();
+  } else {
+    await enterRouteMode();
+  }
+}
+
+/**
+ * Create the "가는 길 충전소" pill button and insert it after the filter chips row.
+ * Hidden until a destination is set.
+ */
+function createRouteModeButton() {
+  btnRouteMode = document.createElement('button');
+  btnRouteMode.id = 'btn-route-mode';
+  btnRouteMode.className = 'btn-route-mode';
+  btnRouteMode.type = 'button';
+  btnRouteMode.hidden = true;
+  btnRouteMode.setAttribute('aria-pressed', 'false');
+  btnRouteMode.setAttribute('aria-label', '가는 길 충전소 보기');
+
+  // SVG route icon (branching path / route symbol)
+  btnRouteMode.innerHTML = `
+    <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24"
+         fill="none" stroke="currentColor" stroke-width="2"
+         stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <circle cx="5" cy="6" r="2"/>
+      <circle cx="19" cy="6" r="2"/>
+      <circle cx="12" cy="18" r="2"/>
+      <path d="M5 8c0 4 7 6 7 6s7-2 7-6"/>
+    </svg>
+    <span>가는 길 충전소</span>`;
+
+  btnRouteMode.addEventListener('click', () => toggleRouteMode());
+
+  // Insert after filter-chips row
+  const filterChips = document.querySelector('.filter-chips');
+  if (filterChips && filterChips.parentNode) {
+    filterChips.parentNode.insertBefore(btnRouteMode, filterChips.nextSibling);
+  } else {
+    document.body.appendChild(btnRouteMode);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // GPS button
 // ---------------------------------------------------------------------------
 
@@ -1517,6 +1878,9 @@ async function main() {
 
   // 10. Wire map idle → refetch on move (Task 11)
   wireIdleRefetch();
+
+  // 11. Create "가는 길 충전소" route corridor button (hidden until destination set)
+  createRouteModeButton();
 }
 
 // ---------------------------------------------------------------------------

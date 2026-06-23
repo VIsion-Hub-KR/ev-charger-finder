@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join, extname } from 'node:path';
 import chargersHandler from '../api/chargers.js';
 import searchHandler   from '../api/search.js';
+import routeHandler    from '../api/route.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', 'public');
 const PORT = 3000;
@@ -22,6 +23,7 @@ const TYPES = {
 const apiHandlers = {
   '/api/chargers': chargersHandler,
   '/api/search':   searchHandler,
+  '/api/route':    routeHandler,
 };
 
 /**

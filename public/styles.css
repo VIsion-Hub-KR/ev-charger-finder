@@ -819,3 +819,126 @@ body {
 #loading-elapsed {
   font-variant-numeric: tabular-nums; /* keep layout stable as seconds tick */
 }
+
+/* ============================================================
+   Route Corridor Mode — "가는 길 충전소"
+   ============================================================ */
+
+/* Pill button injected after .filter-chips */
+.btn-route-mode {
+  position: fixed;
+  top: max(118px, calc(env(safe-area-inset-top, 16px) + 102px));
+  left: 16px;
+  z-index: 100;
+
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+
+  height: 36px;
+  padding: 0 16px;
+  border-radius: 18px;
+  border: 1.5px solid #1c6ef2;
+  background: #fff;
+  color: #1c6ef2;
+
+  font-family:
+    "Apple SD Gothic Neo",
+    "Pretendard",
+    -apple-system,
+    BlinkMacSystemFont,
+    sans-serif;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  box-shadow: 0 1px 4px rgba(28, 110, 242, 0.18);
+  transition:
+    background 0.15s ease,
+    color 0.15s ease,
+    box-shadow 0.15s ease,
+    transform 0.12s ease;
+  word-break: keep-all;
+}
+
+.btn-route-mode:active {
+  transform: scale(0.96);
+}
+
+.btn-route-mode:focus-visible {
+  outline: 3px solid #1c6ef2;
+  outline-offset: 3px;
+}
+
+.btn-route-mode[hidden] {
+  display: none;
+}
+
+/* Active state: route mode is ON */
+.btn-route-mode.btn-route--active {
+  background: #1c6ef2;
+  color: #fff;
+  box-shadow: 0 2px 8px rgba(28, 110, 242, 0.30);
+}
+
+/* Route summary banner — shows while route mode is on */
+.route-banner {
+  position: fixed;
+  top: max(162px, calc(env(safe-area-inset-top, 16px) + 146px));
+  left: 16px;
+  right: 16px;
+  z-index: 101;
+
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+
+  background: #1c6ef2;
+  color: #fff;
+  border-radius: 12px;
+  padding: 10px 14px;
+  font-size: 13px;
+  font-weight: 500;
+  word-break: keep-all;
+  box-shadow: 0 4px 14px rgba(28, 110, 242, 0.30);
+  animation: notice-fadein 0.2s ease forwards;
+}
+
+.route-banner[hidden] {
+  display: none;
+}
+
+.route-banner-text {
+  flex: 1;
+  line-height: 1.4;
+}
+
+.route-banner-text strong {
+  font-weight: 700;
+}
+
+.route-banner-close {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(255, 255, 255, 0.22);
+  color: #fff;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: background 0.12s ease;
+  min-width: 44px; /* touch target */
+  min-height: 44px;
+  margin: -8px -8px -8px 0;
+}
+
+.route-banner-close:active {
+  background: rgba(255, 255, 255, 0.38);
+}
+
