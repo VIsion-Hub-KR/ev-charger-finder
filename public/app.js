@@ -1781,7 +1781,7 @@ async function enterRouteMode() {
   updateChipUI(document.querySelectorAll('.chip[data-filter]'));
 
   // 6. Filter to stations within 3 km of the route polyline
-  const CORRIDOR_M = 3000;
+  const CORRIDOR_M = 1000; // 경로에 바짝 붙은(±1km) 급속 충전기만
   const corridorStations = Array.from(stationMap.values()).filter((st) => {
     const lat = Number(st.lat ?? st.latitude);
     const lng = Number(st.lng ?? st.longitude);
