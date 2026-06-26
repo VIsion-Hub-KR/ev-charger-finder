@@ -47,13 +47,23 @@ body {
   background: #e8e8e8; /* placeholder colour until map tiles load */
 }
 
-/* ---------- Floating Search Bar ---------- */
-.search-bar {
+/* ---------- Floating Search Stack (출발지 + 도착지) ---------- */
+.search-stack {
   position: fixed;
   top: max(16px, env(safe-area-inset-top, 16px));
   left: 16px;
   right: 16px;
   z-index: 100;
+
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* ---------- Floating Search Bar (스택 안에서 흐름) ---------- */
+.search-bar {
+  position: relative;
+  width: 100%;
 
   display: flex;
   align-items: center;
@@ -76,20 +86,51 @@ body {
   align-items: center;
 }
 
-#search-input {
+/* 출발지 "현재 위치로" 버튼 */
+.start-use-loc-btn {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: none;
+  background: #f1faf4;
+  color: #1c9e52;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: background 0.12s ease;
+}
+
+.start-use-loc-btn:active {
+  background: #e2f3e9;
+}
+
+/* 출발지·도착지 입력칸 공통 — 두 칸 동일하게 깔끔히(테두리 없음) */
+.search-bar input {
   flex: 1;
   border: none;
   outline: none;
   background: transparent;
   font-family: inherit;
-  font-size: 15px;
+  font-size: 16px; /* iOS Safari는 16px 미만 입력창 포커스 시 자동 확대 → 화면 우측 잘림. 16px로 방지 */
   color: #1a1a1a;
   cursor: text;
   min-width: 0; /* prevent overflow in flex container */
+  -webkit-appearance: none;
+  appearance: none;
 }
 
-#search-input::placeholder {
+.search-bar input::placeholder {
   color: #aaa;
+}
+
+/* type=search 기본 장식(취소 버튼 등) 숨김 */
+.search-bar input::-webkit-search-decoration,
+.search-bar input::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+  appearance: none;
 }
 
 /* Clear (×) button inside search bar */
@@ -120,7 +161,7 @@ body {
 /* Search "no result" inline message */
 .search-no-result {
   position: fixed;
-  top: max(76px, calc(env(safe-area-inset-top, 16px) + 60px));
+  top: max(136px, calc(env(safe-area-inset-top, 16px) + 120px));
   left: 16px;
   right: 16px;
   z-index: 101;
@@ -144,7 +185,7 @@ body {
 /* ---------- Filter Chips ---------- */
 .filter-chips {
   position: fixed;
-  top: max(76px, calc(env(safe-area-inset-top, 16px) + 60px));
+  top: max(136px, calc(env(safe-area-inset-top, 16px) + 120px));
   left: 0;
   right: 0;
   z-index: 100;
@@ -247,8 +288,9 @@ body {
 }
 
 /* ---------- GPS / My Location Button ---------- */
+/* 하단 "주변 충전소" 시트 손잡이(peek 56px)에 가려지지 않도록 56px만큼 띄움 */
 .btn-my-location {
-  bottom: max(32px, env(safe-area-inset-bottom, 32px));
+  bottom: calc(56px + max(16px, env(safe-area-inset-bottom, 16px)));
   width: 52px;   /* touch target ≥ 44px */
   height: 52px;
   color: #e31937; /* Tesla Red accent, sparingly */
@@ -256,7 +298,7 @@ body {
 
 /* Map type toggle — sits above GPS button */
 .btn-map-type {
-  bottom: calc(max(32px, env(safe-area-inset-bottom, 32px)) + 60px);
+  bottom: calc(56px + max(16px, env(safe-area-inset-bottom, 16px)) + 60px);
   width: 52px;
   height: 52px;
   flex-direction: column;
@@ -640,6 +682,33 @@ body {
   transform: translateY(-2px);
 }
 
+/* 출발지 핀 — 초록 (목적지 파랑과 구분) */
+.start-pin-wrap {
+  filter: drop-shadow(0 3px 6px rgba(28, 158, 82, 0.40));
+}
+
+.start-pin-label {
+  background: #1c9e52;
+  color: #fff;
+  font-family:
+    "Apple SD Gothic Neo",
+    "Pretendard",
+    -apple-system,
+    BlinkMacSystemFont,
+    sans-serif;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.2;
+  padding: 2px 7px;
+  border-radius: 8px;
+  white-space: nowrap;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  word-break: keep-all;
+  pointer-events: none;
+}
+
 /* Small label under the pin */
 .dest-pin-label {
   background: #1c6ef2;
@@ -831,9 +900,10 @@ body {
    ============================================================ */
 
 /* Pill button injected after .filter-chips */
+/* 신선도 칩(top 176, ~206까지) 아래로 내려 겹침 방지 */
 .btn-route-mode {
   position: fixed;
-  top: max(118px, calc(env(safe-area-inset-top, 16px) + 102px));
+  top: max(214px, calc(env(safe-area-inset-top, 16px) + 198px));
   left: 16px;
   z-index: 100;
 
@@ -891,7 +961,7 @@ body {
 /* Route summary banner — shows while route mode is on */
 .route-banner {
   position: fixed;
-  top: max(162px, calc(env(safe-area-inset-top, 16px) + 146px));
+  top: max(258px, calc(env(safe-area-inset-top, 16px) + 242px));
   left: 16px;
   right: 16px;
   z-index: 101;
@@ -925,6 +995,25 @@ body {
   font-weight: 700;
 }
 
+.route-banner-toggle {
+  flex-shrink: 0;
+  border: none;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.22);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  padding: 6px 10px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: background 0.12s ease;
+}
+
+.route-banner-toggle:active {
+  background: rgba(255, 255, 255, 0.38);
+}
+
 .route-banner-close {
   flex-shrink: 0;
   display: flex;
@@ -953,11 +1042,12 @@ body {
    ============================================================ */
 
 /* Sits above .btn-map-type (which is above .btn-my-location).
-   Stack (bottom → top): GPS 32px, map-type 32+60=92px, refresh 32+120=152px */
+   하단 시트 peek(56px) 위로 띄운 base = 56px + max(16px, safe-area).
+   Stack (bottom → top): GPS base, map-type base+60, refresh base+120 */
 .btn-refresh {
   position: fixed;
   right: 16px;
-  bottom: calc(max(32px, env(safe-area-inset-bottom, 32px)) + 120px);
+  bottom: calc(56px + max(16px, env(safe-area-inset-bottom, 16px)) + 120px);
   z-index: 100;
 
   display: flex;
@@ -1016,8 +1106,8 @@ body {
 
 #freshness-indicator {
   position: fixed;
-  /* Sits below filter chips (76px) + chip row height (34px) + gap (6px) = ~116px */
-  top: max(116px, calc(env(safe-area-inset-top, 16px) + 100px));
+  /* 출발/도착 2칸(스택) + 필터칩 아래 */
+  top: max(176px, calc(env(safe-area-inset-top, 16px) + 160px));
   left: 16px;
   z-index: 100;
 
@@ -1042,5 +1132,252 @@ body {
 
 #freshness-indicator[hidden] {
   display: none;
+}
+
+/* ============================================================
+   주행가능 거리 (Model X) — "주행 가능?" 버튼 + 입력/결과 모달
+   ============================================================ */
+
+/* 우상단 알약 버튼 — 목적지 있을 때만. 좌측 "가는 길 충전소"와 같은 높이, 반대편 */
+.btn-range-check {
+  position: fixed;
+  top: max(214px, calc(env(safe-area-inset-top, 16px) + 198px));
+  right: 16px;
+  z-index: 100;
+
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+
+  height: 36px;
+  padding: 0 16px;
+  border-radius: 18px;
+  border: 1.5px solid #1c9e52;
+  background: #fff;
+  color: #1c9e52;
+
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  box-shadow: 0 1px 4px rgba(28, 158, 82, 0.18);
+  transition: transform 0.12s ease, background 0.15s ease, color 0.15s ease;
+  word-break: keep-all;
+}
+
+.btn-range-check:active {
+  transform: scale(0.96);
+}
+
+.btn-range-check:focus-visible {
+  outline: 3px solid #1c9e52;
+  outline-offset: 3px;
+}
+
+.btn-range-check[hidden] {
+  display: none;
+}
+
+/* 모달 카드 (detail-sheet backdrop 재사용) */
+.range-card {
+  text-align: left;
+}
+
+.range-title {
+  font-size: 17px;
+  font-weight: 800;
+  color: #1a1a1a;
+  padding-right: 36px; /* 닫기 버튼 공간 */
+  word-break: keep-all;
+}
+
+.range-dest {
+  font-size: 13px;
+  color: #777;
+  margin-top: 4px;
+  margin-bottom: 16px;
+  word-break: keep-all;
+}
+
+.range-field {
+  margin-bottom: 14px;
+}
+
+.range-label {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: #555;
+  margin-bottom: 7px;
+}
+
+.range-trims {
+  display: flex;
+  gap: 8px;
+}
+
+.range-trim {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 10px 8px;
+  border-radius: 12px;
+  border: 1.5px solid #ddd;
+  background: #fff;
+  color: #444;
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+
+.range-trim small {
+  font-size: 11px;
+  font-weight: 500;
+  color: #999;
+}
+
+.range-trim--active {
+  border-color: #e31937;
+  background: #fff5f6;
+  color: #e31937;
+}
+
+.range-trim--active small {
+  color: #e31937;
+}
+
+/* 배터리 입력 — iOS 자동 확대 방지 위해 16px */
+.range-input {
+  width: 100%;
+  height: 48px;
+  border: 1.5px solid #ddd;
+  border-radius: 12px;
+  padding: 0 14px;
+  font-family: inherit;
+  font-size: 16px;
+  color: #1a1a1a;
+  background: #fff;
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+
+.range-input:focus {
+  border-color: #1c9e52;
+}
+
+.range-go {
+  width: 100%;
+  min-height: 48px;
+  border: none;
+  border-radius: 12px;
+  background: #1a1a1a;
+  color: #fff;
+  font-family: inherit;
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
+  margin-top: 2px;
+  -webkit-tap-highlight-color: transparent;
+  transition: opacity 0.15s ease;
+}
+
+.range-go:active {
+  opacity: 0.82;
+}
+
+/* 결과 영역 */
+.range-result {
+  margin-top: 14px;
+  border-radius: 12px;
+  padding: 14px 16px;
+  font-size: 13px;
+  word-break: keep-all;
+}
+
+.range-result[hidden] {
+  display: none;
+}
+
+.range-result--loading {
+  background: #f4f4f4;
+  color: #777;
+}
+
+.range-result--warn {
+  background: #fff8e1;
+  color: #8a6d00;
+}
+
+.range-result--ok {
+  background: #e9f8ef;
+  color: #166e3a;
+}
+
+/* 편도도 불가 — 빨강 */
+.range-result--no {
+  background: #fdecee;
+  color: #b3122b;
+}
+
+.range-verdict {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+  font-weight: 800;
+  margin-bottom: 10px;
+}
+
+.range-verdict-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: currentColor;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 900;
+  flex-shrink: 0;
+}
+
+/* 아이콘 원 안 글자색을 흰색으로 (배경은 verdict 색) */
+.range-result--ok .range-verdict-icon { color: #fff; background: #1c9e52; }
+.range-result--warn .range-verdict-icon { color: #fff; background: #e6920a; }
+.range-result--no .range-verdict-icon { color: #fff; background: #e31937; }
+
+.range-stat {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 0;
+  border-top: 1px solid rgba(0, 0, 0, 0.06);
+  font-size: 13px;
+}
+
+.range-stat span { color: #666; }
+.range-stat strong { color: #1a1a1a; font-weight: 700; }
+
+.range-stat--sub {
+  font-size: 12px;
+}
+.range-stat--sub span,
+.range-stat--sub strong { color: #999; font-weight: 600; }
+
+.range-note {
+  margin-top: 12px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #aaa;
+  word-break: keep-all;
 }
 

@@ -11,6 +11,8 @@
 
 'use strict';
 
+import { MODEL_X_TRIMS, DEFAULT_RESERVE_PCT, assessTrip } from './range.js';
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -130,6 +132,40 @@ let btnRouteMode = null;
 
 /** @type {HTMLElement|null} — Summary banner shown while route mode is on */
 let routeBannerEl = null;
+
+/** 경로 모드: 고속도로 휴게소 급속만 우선 표시(true) / 경로상 모든 급속(false). 기본 휴게소만. */
+let routeHighwayOnly = true;
+
+/** @type {object[]} — 현재 경로 코리도(±1km) 안의 급속 충전소 전체(휴게소+일반). 토글 시 재사용. */
+let routeAllFast = [];
+
+/** 현재 경로 총거리(km) — 배너 재렌더용. */
+let routeDistanceKm = 0;
+
+// ---------------------------------------------------------------------------
+// 주행가능 거리(Model X) state
+// ---------------------------------------------------------------------------
+
+/** @type {HTMLElement|null} — "주행 가능?" 우상단 알약 버튼 */
+let btnRangeCheck = null;
+
+/** @type {HTMLElement|null} — 트림/배터리 입력 + 결과 모달 */
+let rangeSheetEl = null;
+
+/** 마지막으로 고른 트림 키(세션 내 편의 기억). */
+let lastTrimKey = 'long-range';
+
+/** 마지막으로 입력한 배터리(%). */
+let lastBatteryPct = '';
+
+/**
+ * 출발지 캐시 — 출발지 검색칸 텍스트를 해석한 좌표. 비우거나 "내 위치"면 myPosition 사용.
+ * @type {{ lat: number, lng: number, name: string, _q?: string }|null}
+ */
+let routeStart = null;
+
+/** @type {naver.maps.Marker|null} — 출발지 핀(초록). */
+let startMarker = null;
 
 // ---------------------------------------------------------------------------
 // Loading elapsed-time state (Task 12 — Feature 3)
@@ -297,6 +333,25 @@ function getZscode(latLng) {
   });
 }
 
+/**
+ * 역지오코딩 zscode를 충전소 조회용 후보 코드(콤마구분)로 확장한다.
+ *
+ * 환경공단 데이터는 "자치단체" 단위로 저장된다(코드 끝자리 0: 강남구 11680, 안성시 41550).
+ * 그런데 수원·성남·고양처럼 행정구가 있는 시는 네이버 역지오코딩이 행정구 코드를
+ * 돌려준다(영통구 41117, 끝자리≠0). 그 코드로 조회하면 데이터가 시 코드(41110)에
+ * 있어 0개가 나온다. 그래서 끝자리가 0이 아니면 시 코드(끝자리 0)도 함께 조회한다.
+ * (자치단체 코드는 모두 끝자리 0이라, 끝자리 0인 코드에는 영향이 없다.)
+ *
+ * @param {string} z — 5자리 zscode
+ * @returns {string} — 콤마로 join된 후보 zscode 목록
+ */
+function expandZscode(z) {
+  if (!z || z.length < 5) return z;
+  const candidates = new Set([z]);
+  if (z[4] !== '0') candidates.add(z.slice(0, 4) + '0'); // 행정구 → 시 코드
+  return [...candidates].join(',');
+}
+
 // ---------------------------------------------------------------------------
 // Freshness indicator
 // ---------------------------------------------------------------------------
@@ -344,6 +399,38 @@ function showFreshness(text) {
 /** Hide the freshness chip. */
 function hideFreshness() {
   if (freshnessEl) freshnessEl.hidden = true;
+}
+
+/** 갱신 중 경과초 타이머 핸들 + 기준(베이스) 텍스트. */
+let refreshElapsedTimer = null;
+let refreshBaseText = '';
+
+/**
+ * 새로고침(라이브 갱신) 중 "갱신 중… (N초 / 최대 ~40초)"를 1초마다 갱신해
+ * 멈춘 게 아니라 진행 중임을 보여준다.
+ */
+function startRefreshElapsed() {
+  const el = ensureFreshnessEl();
+  // 현재 텍스트에서 기존 "· 갱신 중…" 흔적 제거한 걸 베이스로
+  refreshBaseText = (el.textContent || '').replace(/ · 갱신 중….*$/, '').trim()
+    || '충전소 정보';
+  el.hidden = false;
+  const startMs = Date.now();
+  const tick = () => {
+    const sec = Math.floor((Date.now() - startMs) / 1000);
+    el.textContent = `${refreshBaseText} · 갱신 중… (${sec}초 / 최대 ~40초)`;
+  };
+  tick();
+  if (refreshElapsedTimer) clearInterval(refreshElapsedTimer);
+  refreshElapsedTimer = setInterval(tick, 1000);
+}
+
+/** 경과초 타이머 정지(완료/실패 공통). */
+function stopRefreshElapsed() {
+  if (refreshElapsedTimer) {
+    clearInterval(refreshElapsedTimer);
+    refreshElapsedTimer = null;
+  }
 }
 
 /**
@@ -479,9 +566,10 @@ function openChargerSheet(station) {
   const available  = station.availableCount ?? 0;
   const total      = station.totalCount      ?? 0;
   const charging   = station.chargingCount   ?? 0;
-  const name       = station.stationName     || station.statNm || '충전소';
-  const speedLabel = station.chargerType === '급속' ? '급속' : '완속';
-  const speedClass = station.chargerType === '급속' ? 'badge-fast' : 'badge-slow';
+  const name       = station.name || station.stationName || station.statNm || '충전소';
+  const speed      = station.speed || station.chargerType;
+  const speedLabel = speed === '급속' ? '급속' : '완속';
+  const speedClass = speed === '급속' ? 'badge-fast' : 'badge-slow';
   const operator   = station.busiNm || station.operatorName || '';
   const connectors = station.connectorTypes || station.connectors || '';
   const lastUpdate = station.lastUpdate || station.statUpdDt || '';
@@ -801,6 +889,49 @@ function clearDestPin() {
 }
 
 // ---------------------------------------------------------------------------
+// 출발지 핀 (초록 — 목적지 파랑과 구분)
+// ---------------------------------------------------------------------------
+
+/** 출발지 핀 SVG (초록 물방울 + 흰 점). */
+function startPinContent(label) {
+  const safeLabel = label ? String(label).slice(0, 12) : '';
+  const labelPart = safeLabel ? `<div class="start-pin-label">${safeLabel}</div>` : '';
+  return `
+<div class="dest-pin-wrap start-pin-wrap" aria-hidden="true">
+  <svg xmlns="http://www.w3.org/2000/svg" width="32" height="44" viewBox="0 0 32 44" class="dest-pin">
+    <path d="M16 2 C7.163 2 2 9.163 2 16 C2 26 16 42 16 42 C16 42 30 26 30 16 C30 9.163 24.837 2 16 2 Z"
+          fill="#1c9e52" />
+    <circle cx="16" cy="16" r="6" fill="#ffffff" />
+  </svg>
+  ${labelPart}
+</div>`.trim();
+}
+
+/** 출발지 핀을 좌표에 표시(있으면 위치/아이콘 갱신). */
+function setStartPin(coords, label) {
+  const latLng = new naver.maps.LatLng(coords.lat, coords.lng);
+  if (startMarker) {
+    startMarker.setPosition(latLng);
+    startMarker.setIcon({ content: startPinContent(label), anchor: new naver.maps.Point(16, 44) });
+    startMarker.setMap(map);
+    return;
+  }
+  startMarker = new naver.maps.Marker({
+    position: latLng,
+    map,
+    icon: { content: startPinContent(label), anchor: new naver.maps.Point(16, 44) },
+    title: label || '출발지',
+    clickable: false,
+    zIndex: 149,
+  });
+}
+
+/** 출발지 핀 숨김. */
+function clearStartPin() {
+  if (startMarker) startMarker.setMap(null);
+}
+
+// ---------------------------------------------------------------------------
 // Filter application (Task 11)
 // ---------------------------------------------------------------------------
 
@@ -810,17 +941,12 @@ function clearDestPin() {
  * @returns {boolean}
  */
 function chargerPassesFilter(station) {
-  // Speed filter
-  if (filter.speed === 'fast') {
-    const type = station.chargerType || station.chargerTypeCd || '';
-    // 급속: chargerType includes '급속' or DC-based type codes (01,02,03,04)
-    if (!type.includes('급속') && !/^(01|02|03|04)/.test(type)) return false;
-  }
-  if (filter.speed === 'slow') {
-    const type = station.chargerType || station.chargerTypeCd || '';
-    // 완속: chargerType includes '완속' or AC-based type codes (05,06,07)
-    if (!type.includes('완속') && !/^(05|06|07)/.test(type)) return false;
-  }
+  // Speed filter — API가 주는 station.speed('급속'|'완속') 기준으로 판별한다.
+  // (예전 코드는 존재하지 않는 station.chargerType을 읽어 급속/완속 필터가
+  //  모든 충전소를 숨겼다. 고속도로 충전기는 대부분 급속이라 안 보였던 원인.)
+  const speed = station.speed || station.chargerType || '';
+  if (filter.speed === 'fast' && speed !== '급속') return false;
+  if (filter.speed === 'slow' && speed !== '완속') return false;
 
   // Availability filter
   if (filter.avail) {
@@ -897,7 +1023,7 @@ function renderChargerMarkers(stations) {
         content: chargerMarkerContent(available, total),
         anchor:  new naver.maps.Point(18, 42), // tip of pin
       },
-      title:     station.stationName || station.statNm || '',
+      title:     station.name || station.stationName || station.statNm || '',
       clickable: true,
       zIndex:    50,
     });
@@ -995,7 +1121,8 @@ async function _fetchChargerData(centre, zscode, fresh) {
   if (fresh)  params.set('fresh', '1');
 
   const url = `/api/chargers?${params.toString()}`;
-  const res = await fetch(url, { signal: AbortSignal.timeout(65_000) });
+  // 공공 API가 40~80초까지 걸려 65초로는 폰에서 종종 타임아웃 → 90초로 여유
+  const res = await fetch(url, { signal: AbortSignal.timeout(90_000) });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const data = await res.json();
   return Array.isArray(data) ? data : (data.stations ?? data.items ?? []);
@@ -1058,7 +1185,7 @@ async function loadChargers(centre, { force = false, liveOnly = false } = {}) {
   let zscode = '';
   try {
     const latLng = new naver.maps.LatLng(centre.lat, centre.lng);
-    zscode = await getZscode(latLng);
+    zscode = expandZscode(await getZscode(latLng)); // 행정구 도시 보정(시 코드 함께 조회)
   } catch (err) {
     console.warn('[zscode] 역지오코딩 실패, zscode 없이 요청합니다:', err.message);
   }
@@ -1095,13 +1222,8 @@ async function loadChargers(centre, { force = false, liveOnly = false } = {}) {
   // If liveOnly (refresh button), show spinning state immediately.
   if (liveOnly) {
     setRefreshSpinning(true);
-    if (freshnessEl && !freshnessEl.hidden) {
-      // Append "갱신 중…" to existing freshness text
-      const cur = freshnessEl.textContent || '';
-      if (!cur.includes('갱신 중')) {
-        freshnessEl.textContent = cur.replace(' · 갱신 중…', '') + ' · 갱신 중…';
-      }
-    }
+    // "갱신 중… (N초 / 최대 ~40초)" 경과 표시 시작 (멈춘 게 아님을 알림)
+    startRefreshElapsed();
   }
 
   // Guard: only one live refresh at a time
@@ -1163,6 +1285,7 @@ async function loadChargers(centre, { force = false, liveOnly = false } = {}) {
   } finally {
     liveRefreshInFlight = false;
     setRefreshSpinning(false);
+    stopRefreshElapsed();
   }
 }
 
@@ -1456,13 +1579,89 @@ function showSearchNoResult() {
 }
 
 /**
+ * 장소검색(지역검색)에서 결과가 없을 때 도로명/지번 주소를 네이버 지오코더로 보조 검색.
+ * 지도 SDK의 geocoder 서브모듈(naver.maps.Service.geocode)을 쓰므로 서버/비밀키 불필요.
+ *
+ * @param {string} query
+ * @returns {Promise<{ lat: number, lng: number, name: string }|null>}
+ */
+function geocodeAddress(query) {
+  return new Promise((resolve) => {
+    const ok = window.naver && naver.maps && naver.maps.Service
+      && typeof naver.maps.Service.geocode === 'function';
+    if (!ok) { resolve(null); return; }
+
+    naver.maps.Service.geocode({ query }, (status, response) => {
+      if (status !== naver.maps.Service.Status.OK) { resolve(null); return; }
+      const addr = response?.v2?.addresses?.[0];
+      if (!addr) { resolve(null); return; }
+      const lng = Number(addr.x);
+      const lat = Number(addr.y);
+      if (!isFinite(lat) || !isFinite(lng)) { resolve(null); return; }
+      resolve({ lat, lng, name: addr.roadAddress || addr.jibunAddress || query });
+    });
+  });
+}
+
+/**
+ * 입력 문자열(장소명 또는 도로명/지번 주소)을 좌표로 해석한다.
+ * 장소검색(/api/search) → 결과 없으면 주소 지오코더(geocodeAddress) 순서.
+ * "주행 가능?"의 출발지 입력 등에서 재사용.
+ *
+ * @param {string} query
+ * @returns {Promise<{ lat: number, lng: number, name: string }|null>}
+ */
+async function resolvePlaceOrAddress(query) {
+  const q = (query || '').trim();
+  if (!q) return null;
+  try {
+    const res = await fetch(`/api/search?query=${encodeURIComponent(q)}`);
+    if (res.ok) {
+      const first = (await res.json()).results?.[0];
+      if (first) return { lat: first.lat, lng: first.lng, name: first.name || q };
+    }
+  } catch (_err) {
+    // 네트워크 실패 시에도 주소 지오코더로 폴백 시도
+  }
+  return geocodeAddress(q);
+}
+
+/**
+ * 출발지 검색칸의 현재 텍스트를 좌표로 해석한다.
+ * 비었거나 "내 위치"면 myPosition을 쓰고 출발지 핀을 숨긴다.
+ * 그 외 텍스트는 주소/장소로 해석해 출발지 핀을 찍고 캐시한다.
+ * "주행 가능?"·"가는 길 충전소"가 공통으로 호출 → 출발지는 한 곳(검색칸)에서만 관리.
+ *
+ * @returns {Promise<{ lat: number, lng: number, name: string }|null>}
+ */
+async function resolveRouteStart() {
+  const input = document.getElementById('start-input');
+  const q = input ? input.value.trim() : '';
+
+  if (!q || q === '내 위치') {
+    clearStartPin();
+    routeStart = null;
+    if (myPosition) return { lat: myPosition.lat, lng: myPosition.lng, name: '내 위치' };
+    return null;
+  }
+
+  // 같은 텍스트면 캐시 재사용 (불필요한 재조회 방지)
+  if (routeStart && routeStart._q === q) return routeStart;
+
+  const r = await resolvePlaceOrAddress(q);
+  if (!r) return null;
+  r._q = q;
+  routeStart = r;
+  setStartPin({ lat: r.lat, lng: r.lng }, r.name);
+  return r;
+}
+
+/**
  * Search for a place by keyword via the server-side /api/search proxy
  * (Naver 지역검색 Open API) and move the map to the first result.
+ * 장소검색 결과가 없으면 주소 지오코더(geocodeAddress)로 보조 검색한다.
  *
- * Replaces the previous naver.maps.Service.geocode path.
- * Supports place names ("강남역") as well as addresses.
- *
- * On success:  take results[0] → map.setCenter → loadChargers (force reload).
+ * On success:  take first result → map.setCenter → loadChargers (force reload).
  * On no result or error: show "검색 결과 없음".
  *
  * @param {string} query
@@ -1482,12 +1681,18 @@ async function geocodeAndMove(query) {
     return;
   }
 
-  if (!results.length) {
+  let r = results[0];
+
+  // 장소검색 결과가 없으면 도로명/지번 주소 지오코딩으로 보조 검색
+  if (!r) {
+    r = await geocodeAddress(query.trim());
+  }
+
+  if (!r) {
     showSearchNoResult();
     return;
   }
 
-  const r = results[0];
   const centre = { lat: r.lat, lng: r.lng };
 
   // Feature 1: drop/move destination pin at the search result coordinate
@@ -1503,6 +1708,7 @@ async function geocodeAndMove(query) {
     hideRouteBanner();
   }
   updateRouteModeButton();
+  updateRangeButton();
 
   map.setCenter(new naver.maps.LatLng(r.lat, r.lng));
   map.setZoom(DEFAULT_ZOOM);
@@ -1510,6 +1716,57 @@ async function geocodeAndMove(query) {
 
   // Update nearby list after new chargers load
   renderNearbyList();
+}
+
+/**
+ * 출발지 검색칸 연결 — 입력(주소·장소) / "내 위치" 버튼 / 지우기.
+ * 출발지는 routeStart 캐시 + 검색칸 텍스트로만 관리되고, resolveRouteStart로 해석된다.
+ */
+function wireStartSearch() {
+  const input = document.getElementById('start-input');
+  const clearBtn = document.getElementById('start-clear');
+  const useLocBtn = document.getElementById('start-use-loc');
+  if (!input) return;
+
+  input.removeAttribute('readonly');
+
+  input.addEventListener('input', () => {
+    clearBtn.hidden = input.value.trim().length === 0;
+  });
+
+  // Enter / blur 시 출발지 해석 + 핀 갱신 (한글 IME 조합 중 Enter 무시)
+  input.addEventListener('keydown', (e) => {
+    if (e.isComposing || e.keyCode === 229) return;
+    if (e.key === 'Enter') { e.preventDefault(); input.blur(); resolveRouteStart(); }
+  });
+  input.addEventListener('change', () => { resolveRouteStart(); });
+
+  clearBtn.addEventListener('click', () => {
+    input.value = '';
+    clearBtn.hidden = true;
+    routeStart = null;
+    clearStartPin();
+    input.focus();
+  });
+
+  // "현재 위치를 출발지로" — 내 위치로 고정
+  useLocBtn.addEventListener('click', async () => {
+    let pos = myPosition;
+    if (!pos) {
+      useLocBtn.disabled = true;
+      try {
+        pos = await resolveUserPosition();
+        myPosition = pos;
+        if (map) setMyLocationMarker(pos);
+      } finally {
+        useLocBtn.disabled = false;
+      }
+    }
+    input.value = '내 위치';
+    clearBtn.hidden = false;
+    routeStart = null;     // "내 위치" → resolveRouteStart가 myPosition 사용
+    clearStartPin();       // 파란 점이 이미 내 위치를 표시
+  });
 }
 
 /**
@@ -1535,6 +1792,8 @@ function wireSearch() {
       exitRouteMode();
     }
     updateRouteModeButton();
+    updateRangeButton();
+    closeRangeSheet();
   });
 
   // Submit on Enter
@@ -1648,11 +1907,10 @@ function collapseNearbySheet() {
  * @returns {string}
  */
 function nearbyRowHtml(station, dist) {
-  const name        = station.stationName || station.statNm || '충전소';
+  const name        = station.name || station.stationName || station.statNm || '충전소';
   const available   = station.availableCount ?? 0;
   const total       = station.totalCount     ?? 0;
-  const type        = station.chargerType || '';
-  const isFast      = type.includes('급속') || /^(01|02|03|04)/.test(type);
+  const isFast      = (station.speed || station.chargerType) === '급속';
   const speedLabel  = isFast ? '급속' : '완속';
   const availColor  = available > 0 ? '#1c9e52' : '#b0b0b0';
   const distLabel   = fmtDistance(dist);
@@ -1796,7 +2054,45 @@ function updateRouteModeButton() {
  * @param {number} distanceKm
  * @param {number} count — number of corridor stations found
  */
-function showRouteBanner(distanceKm, count) {
+/**
+ * 고속도로(휴게소) 충전소 판별 — 이름에 "휴게소" 포함 여부.
+ * 공식 플래그가 없어 이름 기반 추정이다(예: "안성휴게소 (부산방향) E-pit").
+ * @param {object} st
+ * @returns {boolean}
+ */
+function isHighwayStation(st) {
+  return (st.name || st.stationName || st.statNm || '').includes('휴게소');
+}
+
+/**
+ * 경로 모드 충전소 표시 — routeHighwayOnly에 따라 휴게소만/전체 급속을 그린다.
+ * 휴게소가 0곳이면(짧은 도심 경로 등) 빈 화면 방지로 전체 급속을 보여주고 배너에 안내.
+ */
+function renderRouteChargers() {
+  const highway = routeAllFast.filter(isHighwayStation);
+  const hasMix = highway.length > 0 && routeAllFast.length > highway.length;
+
+  let shown, label, toggle = null;
+  if (routeHighwayOnly && highway.length === 0) {
+    // 휴게소 없음 → 전체 급속으로 폴백(빈 화면 방지)
+    shown = routeAllFast;
+    label = `휴게소 없음 · 경로 급속 <strong>${routeAllFast.length}곳</strong>`;
+  } else if (routeHighwayOnly) {
+    shown = highway;
+    label = `경로 휴게소 급속 <strong>${highway.length}곳</strong>`;
+    if (hasMix) toggle = { highwayOnly: true };
+  } else {
+    shown = routeAllFast;
+    label = `경로 급속 <strong>${routeAllFast.length}곳</strong> (휴게소 포함)`;
+    if (hasMix) toggle = { highwayOnly: false };
+  }
+
+  renderChargerMarkers(shown);
+  renderNearbyList();
+  showRouteBanner(routeDistanceKm, label, toggle);
+}
+
+function showRouteBanner(distanceKm, label, toggle) {
   if (!routeBannerEl) {
     routeBannerEl = document.createElement('div');
     routeBannerEl.id = 'route-banner';
@@ -1806,8 +2102,15 @@ function showRouteBanner(distanceKm, count) {
     document.body.appendChild(routeBannerEl);
   }
 
+  const toggleHtml = toggle
+    ? `<button class="route-banner-toggle" type="button">${
+        toggle.highwayOnly ? '휴게소 외 급속도 보기' : '휴게소만 보기'
+      }</button>`
+    : '';
+
   routeBannerEl.innerHTML = `
-    <span class="route-banner-text">경로 <strong>${distanceKm}km</strong> · 경로 주변 충전소 <strong>${count}곳</strong></span>
+    <span class="route-banner-text">경로 <strong>${distanceKm}km</strong> · ${label}</span>
+    ${toggleHtml}
     <button class="route-banner-close" type="button" aria-label="경로 모드 종료">
       <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"
            fill="none" stroke="currentColor" stroke-width="2.5"
@@ -1816,6 +2119,14 @@ function showRouteBanner(distanceKm, count) {
         <line x1="6" y1="6" x2="18" y2="18"/>
       </svg>
     </button>`;
+
+  const toggleBtn = routeBannerEl.querySelector('.route-banner-toggle');
+  if (toggleBtn) {
+    toggleBtn.addEventListener('click', () => {
+      routeHighwayOnly = !routeHighwayOnly;
+      renderRouteChargers();
+    });
+  }
 
   routeBannerEl.querySelector('.route-banner-close').addEventListener('click', () => {
     exitRouteMode();
@@ -1837,6 +2148,8 @@ function hideRouteBanner() {
  */
 async function exitRouteMode() {
   routeModeActive = false;
+  routeHighwayOnly = true; // 다음 경로를 위해 기본값(휴게소만) 복원
+  routeAllFast = [];
   clearRoutePolyline();
   hideRouteBanner();
   updateRouteModeButton();
@@ -1918,18 +2231,21 @@ function distToPolyline(point, path) {
  * for all 시군구 along the route and filters to the 3 km corridor.
  */
 async function enterRouteMode() {
-  if (!myPosition) {
-    showRetryToast('내 위치를 먼저 확인해 주세요');
+  if (!lastDestination) return;
+
+  // 출발지: 검색칸(주소/장소) 또는 내 위치
+  const start = await resolveRouteStart();
+  if (!start) {
+    showRetryToast('출발지를 확인해 주세요 (출발지 입력 또는 "현재 위치" 버튼)');
     return;
   }
-  if (!lastDestination) return;
 
   showLoading();
 
   // 1. Fetch route from OSRM
   let routeData;
   try {
-    const url = `/api/route?slat=${myPosition.lat}&slng=${myPosition.lng}&glat=${lastDestination.lat}&glng=${lastDestination.lng}`;
+    const url = `/api/route?slat=${start.lat}&slng=${start.lng}&glat=${lastDestination.lat}&glng=${lastDestination.lng}`;
     const res = await fetch(url, { signal: AbortSignal.timeout(25_000) });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     routeData = await res.json();
@@ -1989,7 +2305,7 @@ async function enterRouteMode() {
   await Promise.allSettled(
     Array.from(zscodeMap.entries()).map(async ([zscode, sample]) => {
       try {
-        const url = `/api/chargers?lat=${sample.lat}&lng=${sample.lng}&radius=999&zscode=${zscode}`;
+        const url = `/api/chargers?lat=${sample.lat}&lng=${sample.lng}&radius=999&zscode=${expandZscode(zscode)}`;
         const res = await fetch(url, { signal: AbortSignal.timeout(30_000) });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
@@ -2022,8 +2338,12 @@ async function enterRouteMode() {
   // 7. 급속만 + 빈자리 토글 등 기존 필터 적용 (filter.speed='fast'로 강제됨)
   const filteredStations = corridorStations.filter(chargerPassesFilter);
 
-  // 8. Render corridor stations
-  renderChargerMarkers(filteredStations);
+  // 8. 경로 코리도 급속 전체를 저장하고, 기본은 휴게소(고속도로)만 표시.
+  //    (토글 시 재페치 없이 routeAllFast에서 다시 거른다.)
+  routeAllFast = filteredStations;
+  routeDistanceKm = distanceKm;
+  routeHighwayOnly = true;
+  renderRouteChargers();
 
   // 테슬라 슈퍼차저도 경로 ±1km 안에 있는 것만 표시 (전국 전체 X — 이게 "다 보이던" 버그였음)
   teslaMarkers.forEach((m) => {
@@ -2031,12 +2351,6 @@ async function enterRouteMode() {
     const onRoute = filter.tesla && distToPolyline({ lat: p.lat(), lng: p.lng() }, path) <= CORRIDOR_M;
     m.setMap(onRoute ? map : null);
   });
-
-  // 9. Update nearby list: sort by distance from origin (myPosition)
-  renderNearbyList();
-
-  // 10. Show summary banner
-  showRouteBanner(distanceKm, filteredStations.length);
 
   routeModeActive = true;
   updateRouteModeButton();
@@ -2089,6 +2403,199 @@ function createRouteModeButton() {
   } else {
     document.body.appendChild(btnRouteMode);
   }
+}
+
+// ---------------------------------------------------------------------------
+// 주행가능 거리(Model X) — 배터리%로 목적지 도달/왕복 판단
+// ---------------------------------------------------------------------------
+
+/** 우상단 "주행 가능?" 알약 버튼 생성. 목적지가 있을 때만 보인다. */
+function createRangeCheckButton() {
+  btnRangeCheck = document.createElement('button');
+  btnRangeCheck.id = 'btn-range-check';
+  btnRangeCheck.className = 'btn-range-check';
+  btnRangeCheck.type = 'button';
+  btnRangeCheck.hidden = true;
+  btnRangeCheck.setAttribute('aria-label', '배터리로 목적지까지 갈 수 있는지 확인');
+  btnRangeCheck.innerHTML = `
+    <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24"
+         fill="none" stroke="currentColor" stroke-width="2"
+         stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <rect x="2" y="7" width="16" height="10" rx="2"/>
+      <line x1="22" y1="11" x2="22" y2="13"/>
+    </svg>
+    <span>주행 가능?</span>`;
+  btnRangeCheck.addEventListener('click', () => openRangeSheet());
+  document.body.appendChild(btnRangeCheck);
+}
+
+/** 목적지 유무에 따라 버튼 표시. */
+function updateRangeButton() {
+  if (!btnRangeCheck) return;
+  btnRangeCheck.hidden = !lastDestination;
+}
+
+/** 트림/배터리 입력 + 결과 모달을 (한 번만) 만든다. */
+function ensureRangeSheet() {
+  if (rangeSheetEl) return rangeSheetEl;
+  rangeSheetEl = document.createElement('div');
+  rangeSheetEl.id = 'range-sheet';
+  rangeSheetEl.className = 'detail-sheet'; // 음영+블러 backdrop 재사용
+  rangeSheetEl.hidden = true;
+
+  const trimsHtml = Object.entries(MODEL_X_TRIMS)
+    .map(([k, v]) =>
+      `<button type="button" class="range-trim" data-trim="${k}" role="radio" aria-checked="false">
+         ${v.label}<small>${v.fullRangeKm}km</small>
+       </button>`)
+    .join('');
+
+  rangeSheetEl.innerHTML = `
+    <div class="sheet-card range-card" role="dialog" aria-modal="true" aria-label="주행 가능 거리 확인">
+      <button class="sheet-close" id="range-close" type="button" aria-label="닫기">
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24"
+             fill="none" stroke="currentColor" stroke-width="2.5"
+             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+        </svg>
+      </button>
+      <div class="range-title">목적지까지 갈 수 있을까?</div>
+      <div class="range-dest" id="range-dest"></div>
+
+      <div class="range-field">
+        <div class="range-label">차량 (Tesla Model X)</div>
+        <div class="range-trims" id="range-trims" role="radiogroup" aria-label="트림 선택">${trimsHtml}</div>
+      </div>
+
+      <div class="range-field">
+        <label class="range-label" for="range-battery">현재 배터리 (%)</label>
+        <input id="range-battery" class="range-input" type="number" inputmode="numeric"
+               min="0" max="100" step="1" placeholder="예: 80" aria-label="현재 배터리 퍼센트" />
+      </div>
+
+      <button class="range-go" id="range-go" type="button">확인</button>
+      <div class="range-result" id="range-result" role="status" aria-live="polite" hidden></div>
+      <div class="range-note">EPA 공인 주행거리 기준 · 도착 시 ${DEFAULT_RESERVE_PCT}% 여유를 남기는 보수적 계산이에요. 겨울·고속 실주행은 더 짧을 수 있어요.</div>
+    </div>`;
+  document.body.appendChild(rangeSheetEl);
+
+  rangeSheetEl.querySelector('#range-close').addEventListener('click', closeRangeSheet);
+  rangeSheetEl.addEventListener('click', (e) => {
+    if (e.target === rangeSheetEl) closeRangeSheet(); // backdrop 탭 → 닫기
+  });
+
+  rangeSheetEl.querySelectorAll('.range-trim').forEach((btn) => {
+    btn.addEventListener('click', () => { lastTrimKey = btn.dataset.trim; updateTrimUI(); });
+  });
+
+  const batt = rangeSheetEl.querySelector('#range-battery');
+  batt.addEventListener('input', () => { lastBatteryPct = batt.value; });
+  batt.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); runRangeCheck(); }
+  });
+  rangeSheetEl.querySelector('#range-go').addEventListener('click', () => runRangeCheck());
+
+  return rangeSheetEl;
+}
+
+/** 선택된 트림 버튼 강조. */
+function updateTrimUI() {
+  if (!rangeSheetEl) return;
+  rangeSheetEl.querySelectorAll('.range-trim').forEach((b) => {
+    const on = b.dataset.trim === lastTrimKey;
+    b.classList.toggle('range-trim--active', on);
+    b.setAttribute('aria-checked', on ? 'true' : 'false');
+  });
+}
+
+/** 모달 열기 — 목적지 이름 채우고 직전 입력 복원. */
+function openRangeSheet() {
+  if (!lastDestination) return;
+  ensureRangeSheet();
+  rangeSheetEl.querySelector('#range-dest').textContent = `목적지: ${lastDestination.name}`;
+  updateTrimUI();
+  rangeSheetEl.querySelector('#range-battery').value = lastBatteryPct;
+  rangeSheetEl.querySelector('#range-result').hidden = true;
+  rangeSheetEl.hidden = false;
+}
+
+function closeRangeSheet() {
+  if (rangeSheetEl) rangeSheetEl.hidden = true;
+}
+
+/** 도로 거리 가져와 assessTrip 계산 후 결과 렌더. */
+async function runRangeCheck() {
+  if (!lastDestination || !rangeSheetEl) return;
+  const resultEl = rangeSheetEl.querySelector('#range-result');
+  const batt = rangeSheetEl.querySelector('#range-battery');
+  const batteryPct = Number(batt.value);
+
+  const warn = (msg) => {
+    resultEl.hidden = false;
+    resultEl.className = 'range-result range-result--warn';
+    resultEl.textContent = msg;
+  };
+
+  if (batt.value === '' || !Number.isFinite(batteryPct) || batteryPct < 0 || batteryPct > 100) {
+    warn('배터리를 0~100 사이 숫자로 입력해 주세요.');
+    return;
+  }
+
+  const trim = MODEL_X_TRIMS[lastTrimKey];
+
+  resultEl.hidden = false;
+  resultEl.className = 'range-result range-result--loading';
+  resultEl.textContent = '경로 거리를 계산하는 중…';
+
+  // 출발지: 메인 화면 출발지 검색칸(주소/장소) 또는 내 위치
+  const start = await resolveRouteStart();
+  if (!start) {
+    warn('출발지를 확인할 수 없어요. 상단 출발지 칸에 입력하거나 "현재 위치" 버튼을 눌러주세요.');
+    return;
+  }
+
+  let routeData;
+  try {
+    const url = `/api/route?slat=${start.lat}&slng=${start.lng}&glat=${lastDestination.lat}&glng=${lastDestination.lng}`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(25_000) });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    routeData = await res.json();
+  } catch (err) {
+    console.error('[range] 경로 요청 실패:', err.message);
+    warn('경로를 불러오지 못했어요. 잠시 후 다시 시도해 주세요.');
+    return;
+  }
+
+  const distanceKm = routeData && Number(routeData.distanceKm);
+  if (!Number.isFinite(distanceKm) || distanceKm <= 0) {
+    warn('경로 거리를 계산할 수 없어요.');
+    return;
+  }
+
+  const a = assessTrip({ fullRangeKm: trim.fullRangeKm, batteryPct, distanceKm });
+  renderRangeResult(resultEl, { a, distanceKm, batteryPct, trim, startName: start.name });
+}
+
+/** 결과 카드 렌더. */
+function renderRangeResult(el, { a, distanceKm, batteryPct, trim, startName }) {
+  const arrival = Math.round(a.arrivalPct);
+  const ret = Math.round(a.returnPct);
+  const verdict = a.roundTrip
+    ? { cls: 'ok',   icon: '✓', headline: '왕복까지 가능해요' }
+    : a.oneWay
+      ? { cls: 'warn', icon: '!', headline: '편도는 가능, 왕복은 어려워요' }
+      : { cls: 'no',   icon: '×', headline: '편도도 빠듯해요 — 가는 길에 충전 필요' };
+
+  const pct = (n) => (n <= 0 ? '도중 방전' : `${n}%`);
+
+  el.className = `range-result range-result--${verdict.cls}`;
+  el.innerHTML = `
+    <div class="range-verdict"><span class="range-verdict-icon">${verdict.icon}</span>${verdict.headline}</div>
+    <div class="range-stat"><span>출발</span><strong>${startName}</strong></div>
+    <div class="range-stat"><span>편도 거리</span><strong>${distanceKm}km</strong></div>
+    <div class="range-stat"><span>도착 시 예상 배터리</span><strong>${pct(arrival)}</strong></div>
+    <div class="range-stat"><span>왕복 후 예상 배터리</span><strong>${pct(ret)}</strong></div>
+    <div class="range-stat range-stat--sub"><span>${trim.label} · 현재 ${batteryPct}%</span><strong>안전 주행 ${Math.round(a.usableKm)}km</strong></div>`;
 }
 
 // ---------------------------------------------------------------------------
@@ -2188,12 +2695,18 @@ async function main() {
 
   // 9. Wire address search input (Task 11)
   wireSearch();
+  wireStartSearch(); // 출발지 검색칸
+
+  // 9b. 출발지 기본값은 내 위치 — 초기엔 검색칸 비움(placeholder "비우면 내 위치")
 
   // 10. Wire map idle → refetch on move (Task 11)
   wireIdleRefetch();
 
   // 11. Create "가는 길 충전소" route corridor button (hidden until destination set)
   createRouteModeButton();
+
+  // 12. Create "주행 가능?" button (Model X 배터리→도달/왕복 판단, hidden until destination)
+  createRangeCheckButton();
 }
 
 // ---------------------------------------------------------------------------
